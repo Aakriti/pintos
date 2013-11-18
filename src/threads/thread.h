@@ -100,6 +100,11 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+    /* MODIFY PRIORITY DONATION: struct thread */
+    int old_priority;                   /* orignal priority for donation purposes */
+    struct list locks_held;             /* list of locks currently held by this thread */
+    struct lock *wait_on_lock;          /* stores the lock on which it waits */
   };
 
 /* If false (default), use round-robin scheduler.

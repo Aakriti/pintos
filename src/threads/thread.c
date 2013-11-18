@@ -37,6 +37,17 @@ static struct thread *initial_thread;
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
 
+/* ADD PRIORITY: list based function that compares the priority of two threads */
+static bool thread_priority_cmp(const struct list_elem *t1_,
+                             const struct list_elem *t2_, void *aux UNUSED)
+{
+  const struct thread *t1 = list_entry (t1_, struct thread, elem);
+  const struct thread *t2 = list_entry (t2_, struct thread, elem);
+  return t1->priority < t2->priority;
+}
+
+
+
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
   {
@@ -208,6 +219,9 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+  /* MODIFY PRIORITY: yield if higher priority thread is added */
+  if(t->priority > thread_current()->priority)
+    thread_yield();
 
   return tid;
 }
@@ -248,6 +262,12 @@ thread_unblock (struct thread *t)
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+
+
+  /* MODIFY PRIORITY: yield if higher priority thread is added */
+  if(old_level == INTR_ON)
+    if(thread_current()->priority < t->priority)
+      thread_yield();
 }
 
 /* Returns the name of the running thread. */
@@ -343,7 +363,39 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  /* ADD MLFQS: call to set priority should return without making changes */
+  if(thread_mlfqs)
+    return;
+
+  int t;
+  if(new_priority <= PRI_MAX && new_priority >= PRI_MIN)
+  {
+    /* MODIFY PRIORITY DONATION: thread_set_priority */
+    //thread_set_priority is only called from within, make sure it doesn't disturb donations
+    if(new_priority > thread_current ()->priority)
+    {
+      //if new priority is higher, dont worry about donations
+      thread_current ()->priority = new_priority;
+      thread_current ()->old_priority = new_priority;
+    }
+    else if(thread_current ()->priority == thread_current ()->old_priority)
+    {
+      //new priority is not higher, check if working on a donated priority
+      //if not, change.
+      thread_current ()->priority = new_priority;
+      thread_current ()->old_priority = new_priority;
+    }
+    else
+    {
+      //if working on a donated priority, we'll save this change in old priority
+      thread_current ()->old_priority = new_priority;
+    }
+
+    //yield if there exists a higher priority thread in ready_list
+    t = list_entry(list_max (&ready_list,thread_priority_cmp,NULL),struct thread,elem)->priority;
+    if(t > thread_current ()->priority)
+      thread_yield();
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -470,6 +522,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  /* MODIFY PRIORITY DONATION: initialize the new attributes of struct thread */
+  if(!thread_mlfqs)
+  {
+    t->priority = priority;
+    t->old_priority = priority;
+  }
+
+  list_init (&t->locks_held);
+  t->wait_on_lock = NULL;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
@@ -496,7 +558,13 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  {
+    /* MODIFY PRIORITY: choose highest priority thread to run from ready_list */
+    //return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    struct list_elem *e = list_max (&ready_list,thread_priority_cmp,NULL);
+    list_remove(e);
+    return list_entry(e,struct thread,elem);
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
