@@ -1,0 +1,4 @@
+find . -name '*.[h|c]' > cscope.files
+cscope -b -q -T
+ctags -L cscope.files
+cat cscope.files | xargs ctags -R
