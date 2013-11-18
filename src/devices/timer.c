@@ -8,6 +8,7 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -45,6 +46,8 @@ static bool sleep_thread_cmp(const struct list_elem *b1_,
 /* ADD ALARM: lock for accessing sleep_list */
 static struct lock sleep_list_lock;
 
+int constant1, constant2; //move computation outside timer_interrupt
+
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
@@ -55,6 +58,9 @@ timer_init (void)
 
   list_init (&sleep_list);
   lock_init (&sleep_list_lock);
+
+  constant1 = divide_fixed_and_integer(convert_to_fixed_point(59),60);
+  constant2 = divide_fixed_and_integer(convert_to_fixed_point(1),60);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -114,6 +120,7 @@ timer_sleep (int64_t ticks)
     struct thread *cur = thread_current ();
     int64_t uptime = timer_ticks () + ticks;
 
+    //struct sleeping_threads *node = malloc(sizeof(struct sleeping_threads));
     struct sleeping_threads *node = palloc_get_page (PAL_ZERO);
     if (node == NULL)
     PANIC ("Failed to allocate memory for a new blocked thread");
@@ -204,7 +211,8 @@ timer_print_stats (void)
 {
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
+int i,j;
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
@@ -224,8 +232,34 @@ timer_interrupt (struct intr_frame *args UNUSED)
       intr_yield_on_return ();
 
     palloc_free_page(node);
+    //free(node);
 
     node = list_entry(list_begin(&sleep_list),struct sleeping_threads,elem1);
+  }
+
+  /* MODIFY MLFQS: timer interrupt handler */
+  if(thread_mlfqs)
+  {
+    //increment recent cpu at each tick
+    if(thread_current() != get_idle_thread())
+      thread_current()->recent_cpu = add_fixed_and_integer(thread_current()->recent_cpu,1);
+
+    //update recent cpu and load avg every second
+    if(ticks % TIMER_FREQ == 0)
+    {
+       i = multiply_fixed_point(constant1,get_system_load_avg());
+       j = multiply_fixed_and_integer(constant2,get_ready_threads());
+       set_system_load_avg(i + j);
+
+       thread_foreach (calculate_recent_cpu, 0);
+    }
+
+    //calculate priority every 4th tick
+    if(ticks % 4 == 0)
+    {
+      thread_foreach (calculate_priority, 0);
+      intr_yield_on_return ();
+    }
   }
 
   thread_tick ();

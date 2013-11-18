@@ -126,7 +126,7 @@ sema_up (struct semaphore *sema)
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
   {
-    //MODIFY PRIORITY: max priority blocked thread on sema should be woken up
+    /* MODIFY PRIORITY: max priority blocked thread on sema should be woken up */
     //thread_unblock (list_entry (list_pop_front (&sema->waiters), struct thread, elem));
     e = list_max (&sema->waiters,thread_pri_cmp,NULL);
     list_remove(e);
@@ -203,7 +203,7 @@ lock_init (struct lock *lock)
   sema_init (&lock->semaphore, 1);
 }
 
-/* MODIFY PRIORITY DONATION: list based function that compares the max priority of two locks */
+/* ADD PRIORITY DONATION: list based function that compares the max priority of two locks */
 static bool lock_pri_cmp(const struct list_elem *l1_,
                              const struct list_elem *l2_, void *aux UNUSED)
 {
@@ -413,8 +413,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   struct list_elem *e;
   if (!list_empty (&cond->waiters)) 
   {
-    //MODIFY PRIORITY: max priority blocked thread on cond should be woken up
-
+    /* MODIFY PRIORITY: max priority blocked thread on cond should be woken up */
     //sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
     e = list_max (&cond->waiters,cond_pri_cmp,NULL);
     list_remove(e);

@@ -101,10 +101,15 @@ struct thread
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
 
-    /* MODIFY PRIORITY DONATION: struct thread */
+    /* ADD PRIORITY DONATION: struct thread */
     int old_priority;                   /* orignal priority for donation purposes */
     struct list locks_held;             /* list of locks currently held by this thread */
     struct lock *wait_on_lock;          /* stores the lock on which it waits */
+
+    
+    /* ADD MLFQS: struct thread */
+    int nice;
+    int recent_cpu;
   };
 
 /* If false (default), use round-robin scheduler.
@@ -142,5 +147,14 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+/* ADD MLFQ: function decralations */
+void calculate_recent_cpu(struct thread *t, void *aux UNUSED);
+void calculate_priority(struct thread *t, void *aux UNUSED);
+int get_ready_threads(void);
+int get_system_load_avg(void);
+void set_system_load_avg(int load);
+struct thread *get_idle_thread(void);
+
 
 #endif /* threads/thread.h */
