@@ -112,6 +112,8 @@ main (void)
   input_init ();
 #ifdef USERPROG
   exception_init ();
+  /* Aakriti: filesys_lock_init */
+  filesys_lock_init ();
   syscall_init ();
 #endif
 

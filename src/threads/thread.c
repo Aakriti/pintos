@@ -11,9 +11,11 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -36,6 +38,9 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+/* Aakriti: status_dir */
+static struct pid_status *status_dir = NULL;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -166,7 +171,7 @@ tid_t
 thread_create (const char *name, int priority,
                thread_func *function, void *aux) 
 {
-  struct thread *t;
+  struct thread *t,*parent;
   struct kernel_thread_frame *kf;
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
@@ -184,6 +189,21 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  /* Aakriti: thread_create malloc child_process*/
+  struct child_process *cp = malloc(sizeof(struct child_process));
+  cp->pid = tid;
+  cp->wait_called = 0;
+  parent = thread_current(); 
+  list_push_back (&parent->children, &cp->elem);
+
+  /* Aakriti: thread_create malloc pid_status*/
+  struct pid_status *ps = malloc(sizeof(struct pid_status));
+  ps->pid = tid;
+  ps->status = -2;
+  ps->next = status_dir;
+  ps->load = 0;
+  status_dir = ps;
+  
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
      member cannot be observed. */
@@ -210,6 +230,90 @@ thread_create (const char *name, int priority,
   thread_unblock (t);
 
   return tid;
+}
+
+void update_pid_status(int pid, int status)
+{
+  /* Aakriti: update_pid_status */
+  printf("%s: exit(%d)\n",thread_current()->name,status);
+  struct pid_status *p1,*p2,*p = status_dir;
+  while(p->pid != pid)
+    p = p->next;
+
+  if(p != NULL)
+  {
+    p->status = status;
+  }
+
+  /* update exit status and close file */
+  file_close (thread_current()->f);
+  
+  /* free children list and their entries in status_dir*/
+  struct list_elem *e;
+  struct list *list = &thread_current()->children;
+  struct child_process *child;
+  while(!list_empty(list))
+  {
+    p1 = status_dir;
+    p2 = NULL;
+    child = list_entry (list_pop_front(list), struct child_process, elem);
+    pid  = child->pid;
+    free(child);
+
+    while(p1->pid != pid)
+    {
+      p2 = p1;
+      p1 = p1->next;
+    }
+
+    if(p2 != NULL)
+      p2->next = p1->next;
+    else
+      status_dir = p1->next;
+
+    free(p1);
+  }
+}
+
+void update_pid_load(int pid, int load)
+{
+  /* Aakriti: update_pid_load */
+  struct pid_status *p = status_dir;
+  while(p->pid != pid)
+    p = p->next;
+
+  if(p != NULL)
+  {
+    p->load = load;
+  }
+}
+
+int get_pid_status(int pid)
+{
+  /* Aakriti: get_pid_status*/
+  struct pid_status *p = status_dir;
+  while(p->pid != pid)
+    p = p->next;
+
+  if(p == NULL)
+  {
+    return -1;
+  }
+  return p->status;
+}
+
+int get_pid_load(int pid)
+{
+  /* Aakriti: get_pid_load*/
+  struct pid_status *p = status_dir;
+  while(p->pid != pid)
+    p = p->next;
+
+  if(p == NULL)
+  {
+    return -1;
+  }
+  return p->load;
 }
 
 /* Puts the current thread to sleep.  It will not be scheduled
@@ -470,6 +574,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
+
+  /* Aakriti: init_thread */
+  list_init(&t->children);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

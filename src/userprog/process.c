@@ -17,6 +17,33 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
+
+/* Aakriti: file system lock */
+static struct lock filesys_lock;
+
+void 
+filesys_lock_init(void)
+{
+  lock_init (&filesys_lock);
+}
+void 
+filesys_lock_acquire(void)
+{
+  lock_acquire (&filesys_lock);
+}
+void 
+filesys_lock_release(void)
+{
+  lock_release (&filesys_lock);
+}
+struct thread * 
+filesys_lock_holder(void)
+{
+  return (&filesys_lock)->holder;
+}
+
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -28,7 +55,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy,*save_ptr = NULL;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
@@ -38,12 +65,16 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  file_name = strtok_r (file_name, " ", &save_ptr);
+
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+
   return tid;
 }
+
 
 /* A thread function that loads a user process and starts it
    running. */
@@ -61,6 +92,13 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
+  /* Aakriti: start_process */
+  if(success)
+    update_pid_load(thread_current()->tid,1);
+  else
+    update_pid_load(thread_current()->tid,2);
+  
+
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -74,6 +112,7 @@ start_process (void *file_name_)
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
+
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
@@ -86,10 +125,39 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  /* Aakriti: inside process_wait */
+
+  struct thread *t= thread_current();
+  struct list_elem *e;
+  struct list *list = &t->children;
+  struct child_process *child;
+
+  int sz = list_size(&t->children);
+  if(sz < 1)
+    return -1;  //because it has no children
+
+  for(e = list_begin (list); e != list_end (list); e = list_next (e))
+  {
+    child = list_entry (e, struct child_process, elem);
+    if(child->pid == child_tid)
+    {
+      if(child->wait_called)
+        return -1;  //wait already called
+
+      child->wait_called = 1;
+
+      while(get_pid_status(child_tid) == -2)
+      {
+         thread_yield();
+      }
+      return get_pid_status(child_tid);
+    }
+  }
+  return -1; //not a direct child
 }
+
 
 /* Free the current process's resources. */
 void
@@ -195,7 +263,8 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+/* Aakriti: add filename as argument for setup_stack */
+static bool setup_stack (void **esp, const char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -214,6 +283,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
+  char *fl_name,*save_ptr;
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
@@ -221,13 +291,24 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
+  /* Aakriti: Get the first token as file name */
+  fl_name = palloc_get_page (PAL_USER);
+  if (fl_name == NULL)
+    return TID_ERROR;
+  strlcpy (fl_name, file_name, PGSIZE);
+  fl_name = strtok_r (fl_name, " ", &save_ptr);
+
+  filesys_lock_acquire();
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (fl_name);
+  
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", fl_name);
       goto done; 
     }
+  
+  file_deny_write(file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -238,7 +319,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", fl_name);
       goto done; 
     }
 
@@ -302,20 +383,26 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp,file_name))
     goto done;
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
   success = true;
-
+  t->f = file;
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  if(!success)
+    file_close (file);
+
+  palloc_free_page (fl_name);
+
+  if(filesys_lock_holder() == thread_current())
+    filesys_lock_release();
   return success;
 }
-
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);
@@ -424,10 +511,62 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   return true;
 }
 
+/* Aakriti: function to tokenize and set stack */
+static void *
+tokenize_stackit (const char *file_name)
+{
+  char *fl_name,*save_ptr;
+  char *token, **addr,*ptr = PHYS_BASE;
+  int  i=0, align=0, argcount=0;
+  
+  addr = palloc_get_page (PAL_USER);
+  if (addr == NULL)
+    return TID_ERROR;
+
+  for (token = strtok_r (file_name, " ", &save_ptr); token != NULL;
+        token = strtok_r (NULL, " ", &save_ptr))
+   {
+      ptr -= strlen(token)+1;
+      strlcpy(ptr,token,strlen(token)+1);
+      addr[argcount] = ptr;
+      argcount++;
+      align += strlen(token) + 1;
+   }
+  while(align%4 != 0)
+   {
+      ptr -= sizeof(uint8_t);
+      *ptr = 0;
+      align++;
+   }  
+
+  ptr -= sizeof(char *);
+  *ptr = 0; //last argv is zero
+
+  for(i=argcount-1;i>=0;i--)
+   {
+      ptr -= sizeof(char *);
+      memcpy(ptr,&addr[i],sizeof(char *));
+   }
+
+  save_ptr = ptr;
+  ptr -= sizeof(char **);
+  memcpy(ptr,&save_ptr,sizeof(char *));
+
+  ptr -= sizeof(int);
+  *ptr = (int) argcount; //push argc value
+
+  ptr -= sizeof(void*);
+  *ptr = 0;     //push dummy return value
+
+  palloc_free_page (addr);
+  return ptr;
+} 
+
+
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp,const char *file_name) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -437,7 +576,11 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+      {
+        *esp = tokenize_stackit(file_name);
+        if(esp < ((uint8_t *) PHYS_BASE) - PGSIZE)
+          success = false;
+      }
       else
         palloc_free_page (kpage);
     }

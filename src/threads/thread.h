@@ -80,6 +80,15 @@ typedef int tid_t;
    only because they are mutually exclusive: only a thread in the
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
+
+/* Aakriti: struct child_process */
+struct child_process
+{
+  int pid;                /* process ID of child process */
+  int wait_called;        /* to enable checking if wait is called on this child or not */
+  struct list_elem elem;
+};
+
 struct thread
   {
     /* Owned by thread.c. */
@@ -100,7 +109,24 @@ struct thread
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
+
+    /* Aakriti: struct thread */
+    struct list children;
+    struct file *f;
   };
+
+/* Aakriti: struct pid_status */
+struct pid_status
+{
+  int pid;
+  int status;
+  int load;
+  struct pid_status *next;
+};
+void update_pid_status(int pid, int status);
+void update_pid_load(int pid, int load);
+int get_pid_status(int pid);
+int get_pid_load(int pid);
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

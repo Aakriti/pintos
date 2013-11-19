@@ -4,6 +4,8 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/syscall.h"
+
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -89,6 +91,11 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
+      /* Aakriti: inside exception */
+      if(filesys_lock_holder() == thread_current())
+        filesys_lock_release();
+      file_cleanup(thread_current()->tid);
+      update_pid_status(thread_current()->tid, -1);
       thread_exit (); 
 
     case SEL_KCSEG:
@@ -104,6 +111,11 @@ kill (struct intr_frame *f)
          kernel. */
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
+      /* Aakriti: inside exception */
+      if(filesys_lock_holder() == thread_current())
+        filesys_lock_release();
+      file_cleanup(thread_current()->tid);
+      update_pid_status(thread_current()->tid, -1);
       thread_exit ();
     }
 }
