@@ -17,9 +17,20 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
+#include "userprog/syscall.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (char *cmdline, void (**eip) (void), void **esp);
+
+/* CADroid: To let the process_execute know that load status */
+struct load_info {
+  char *fn_copy;
+  struct semaphore signal;	// signal to remove the allocted data
+  bool load_success;		// return tid depends on load success
+};
+
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -29,7 +40,13 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char *prog_name;
   tid_t tid;
+  int i,len;
+  
+  /* CADroid: Packing the required data to be sent to thread_create */
+  struct load_info *pack = malloc(sizeof(struct load_info));
+  sema_init (&pack->signal, 0);
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -37,11 +54,35 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
+  pack->fn_copy = fn_copy;
+
+  /*CADroid: Copying program name */
+  i = 0; len = 0;
+  while (fn_copy[i] == ' ') i++;
+  while (fn_copy[i+len] != ' ' && fn_copy[i+len] != '\0') len++;
+  len++;
+  
+  prog_name =  malloc (sizeof(char)*len);
+  if (prog_name == NULL) {
+    free (fn_copy);
+    return TID_ERROR;
+  }
+  strlcpy (prog_name, &fn_copy[i], len);
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  tid = thread_create (prog_name, PRI_DEFAULT, start_process, pack);
+
+  /* CADroid: Wait till the load is complete to free the allocted 
+    memory and update the tid based on load success */
+  sema_down(&pack->signal);
+  
+  if (!pack->load_success)
+    tid = TID_ERROR;
+
+  palloc_free_page (fn_copy);
+  free (prog_name);
+  free (pack);
+  
   return tid;
 }
 
@@ -50,9 +91,13 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  char *file_name = file_name_;
+  struct load_info *unpack = file_name_;
+  char *file_name = unpack->fn_copy;
   struct intr_frame if_;
   bool success;
+
+  /* CADroid: Setting user bool value true */
+  thread_current ()->user = true;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -61,10 +106,15 @@ start_process (void *file_name_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  /* CADroid: Passing the signal and load status to process_execute */
+  unpack->load_success = success;
+  sema_up(&unpack->signal);
+
+  /* If load failed, quit. CADroid: Set exit code */
+  if (!success) {
+    thread_current ()->exit_code = -1;
     thread_exit ();
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -76,8 +126,27 @@ start_process (void *file_name_)
   NOT_REACHED ();
 }
 
-/* Waits for thread TID to die and returns its exit status.  If
-   it was terminated by the kernel (i.e. killed due to an
+/* CADroid: Create the childinfo struct and add it to the parent child_list */
+bool 
+create_childinfo (struct thread *t)
+{
+  t->childinfo = malloc (sizeof (struct info_parent));
+  if (t->childinfo == NULL) 
+    return false;
+  
+  /* initalize the info */
+  t->childinfo->id = t->tid;
+  t->childinfo->thread = t;
+  lock_init (&t->childinfo->lock);
+  cond_init (&t->childinfo->cond);
+  
+  /* Push this childinfo into the parent child_list */
+  list_push_back (&thread_current ()->child_list, &t->childinfo->elem);
+  return true;
+}
+
+/* CADroid: Waits for thread TID to die and returns its exit status.  
+   If it was terminated by the kernel (i.e. killed due to an
    exception), returns -1.  If TID is invalid or if it was not a
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
@@ -86,9 +155,40 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
-  return -1;
+  struct list_elem *e;
+  struct info_parent *childinfo = NULL;
+  struct thread *cur = thread_current ();
+  int status;
+
+  /* Check if child_tid is one of children of this thread */
+  for (e = list_begin (&cur->child_list); 
+  		e != list_end (&cur->child_list); e = list_next (e))
+  {
+    childinfo = list_entry (e, struct info_parent, elem);
+    if (childinfo->id == child_tid)
+      break;
+  }
+
+  /* If child_tid is not a child, or has already 
+     been removed, return -1 */
+  if (e == list_end (&cur->child_list)) 
+    return -1;
+
+  /* If child_tid is running, wait for a signal */
+  lock_acquire (&childinfo->lock);
+  if (childinfo->thread != NULL)
+    cond_wait (&childinfo->cond, &childinfo->lock);
+
+  status = childinfo->exit_status;
+
+  /* Remove the childinfo, as the child exited */
+  list_remove (&childinfo->elem);
+  lock_release (&childinfo->lock);
+  free (childinfo);
+
+  return status;
 }
 
 /* Free the current process's resources. */
@@ -97,7 +197,53 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+  
+  /* CADroid: Process termination message */
+  printf("%s: exit(%d)\n", cur->name, cur->exit_code);
 
+  /* CADroid: Close all the files and clear the file descriptors memory */
+  struct file_dscptr *fd_ptr;
+  while (!list_empty(&cur->fd_list))
+  {
+    fd_ptr = list_entry (list_front (&cur->fd_list), struct file_dscptr, elem);
+    syscall_close (fd_ptr->fd_id);     
+  }
+
+  /* CADroid: Signal the parent process and release the pointer to the
+     childinfo, in the parent's child_list */
+   if (cur->childinfo != NULL)
+   {
+     lock_acquire (&cur->childinfo->lock);
+     cur->childinfo->exit_status = cur->exit_code;
+     cur->childinfo->thread = NULL;
+     cond_signal (&cur->childinfo->cond, &cur->childinfo->lock);
+     lock_release (&cur->childinfo->lock);
+   }
+     
+  /* CADroid: Removing all the childinfo's(elements) in the child_list(list) 
+    of the present thread, clear the pointer refernce of the childs to this info */
+  struct list *list = &cur->child_list;
+  struct info_parent *element;
+  
+  while (!list_empty (list))
+  {
+    element = list_entry (list_pop_front (list), struct info_parent, elem);
+    
+    lock_acquire (&element->lock);
+    if (element->thread != NULL)
+      element->thread->childinfo = NULL;
+    lock_release (&element->lock);
+    free (element);
+  }
+
+  /* CADroid: Closing the program execution file opened */
+  if (cur->prog_file != NULL)
+  {
+    lock_acquire (&file_lock);
+    file_close(cur->prog_file);
+    lock_release (&file_lock);
+  }
+	
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -201,12 +347,98 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
 
+/* CADroid: Function to buildup the stack pushing the arguments and filename */
+static bool
+push_stack (void **esp, char *file_name, char *args_ptr)
+{
+  int argc, len, i, num, size;
+  char *arg, *save_ptr, *temp, ch;
+  
+  /* Getting the number of arguments, including file_name*/
+  argc = 1;
+  size = strlen(file_name) +1;
+  
+  len = strlen(args_ptr) +1;
+  temp = malloc (sizeof(char) * len);
+  strlcpy (temp, args_ptr, len);
+  for (arg = strtok_r (temp, " ", &save_ptr); arg != NULL; 
+                    arg = strtok_r (NULL, " ", &save_ptr))                  
+    argc++;
+  free(temp);
+
+  /* Check to ensure that the stack will not overflow */
+  size += len + argc -2;
+  size += 4 - (size%4);
+  size += (argc+3)*4;
+  if (size > PGSIZE) return false;
+  
+  /* Array to hold the stack pointer values */
+  uint32_t argv[argc];
+
+  /* Pushing into the stack and holding the pointers */
+  i = 0;    
+  len = strlen (file_name) +1;
+  *esp = *esp - len;
+  strlcpy (*esp, file_name, len);
+  
+  argv[i++] = (int)*esp;
+  for (arg = strtok_r (args_ptr, " ", &save_ptr); arg != NULL; 
+                    arg = strtok_r (NULL, " ", &save_ptr))
+  {  
+    len = strlen (arg) +1;
+    *esp = *esp - len;
+    strlcpy (*esp, arg, len);
+    argv[i++] = (int)*esp;
+  }
+  
+  /* word-aligning */
+  i = (int)(*esp) % 4;
+  i = (i+4)%4;
+  ch = '0';  
+  while (i>0)
+  {
+    *esp = *esp - 1;
+    memcpy (*esp, &ch, 1);
+    i--;    
+  }
+
+  /* Pushing the pointers into the stack, with initially 0 passing 
+  and the finally function reference pointer */
+  len = sizeof(char*);
+  *esp = *esp - len;
+  num = 0;
+  memcpy (*esp, &num, len);
+
+  for (i = argc -1; i >= 0; i--)
+  {
+    *esp = *esp - len;
+    memcpy (*esp, &argv[i], len);
+  }
+  
+  num = (int)*esp;
+  len = sizeof(char**);
+  *esp = *esp - len;
+  memcpy (*esp, &num, len);
+
+  /* Push argc and return address */
+  len = sizeof(int);
+  *esp = *esp - len;
+  memcpy (*esp, &argc, len);
+
+  len = sizeof(void*);
+  *esp = *esp - len;
+  num = 0;
+  memcpy (*esp, &num, len);
+  
+  return true;  
+}
+
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (char *file_name_, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -215,6 +447,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  char *args_ptr;
+  /* CADroid: Get file name */
+  char *file_name = strtok_r (file_name_, " ", &args_ptr);
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
@@ -222,12 +458,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
+  /* CADroid: If successfully opened deny writes to the executable */
+  lock_acquire (&file_lock);
   file = filesys_open (file_name);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  else
+    file_deny_write (file);
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -305,17 +545,27 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
+  /* CADroid: Push into stack the arguments along with file_name*/
+  if(!push_stack (esp, file_name, args_ptr))
+    goto done;
+    
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
-
   success = true;
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  /* CADroid: Need to allow writes to file if load failed by closing the file 
+   else saving the file pointer in the thread prog_file pointer */
+  if (!success)
+    file_close (file);
+  else
+    t->prog_file = file;
+
+  lock_release (&file_lock);
   return success;
 }
-
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);

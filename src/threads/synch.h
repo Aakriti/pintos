@@ -17,11 +17,18 @@ bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
 void sema_self_test (void);
 
+/* CADroid: Locks priority comparator */
+bool locks_priority (const struct list_elem *,
+		const struct list_elem *, void *);
+
+
 /* Lock. */
 struct lock 
   {
     struct thread *holder;      /* Thread holding lock (for debugging). */
     struct semaphore semaphore; /* Binary semaphore controlling access. */
+    int priority;		/* CADroid: Lock priority based on waiting list threads. */
+    struct list_elem lock_elem; /* CADroid: To hold the locks in the lock_list. */
   };
 
 void lock_init (struct lock *);

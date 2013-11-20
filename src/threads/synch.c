@@ -113,10 +113,18 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
   sema->value++;
+
+  /* CADroid: Unblocking the thread based on priority */
+  if (!list_empty (&sema->waiters))
+  {
+    struct list_elem *e = list_max (&sema->waiters, priority_less, NULL);  
+    struct thread *t = list_entry (e, struct thread, elem);
+    list_remove (e);
+    thread_unblock (t);
+    if (thread_mlfqs && thread_current ()->mlfq_priority < t->mlfq_priority)
+      thread_yield();
+  }
   intr_set_level (old_level);
 }
 
@@ -196,8 +204,38 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  /* CADroid: Nested priority donation implementation */
+  enum intr_level old_level = intr_disable ();
+  struct thread *t = thread_current();
+  struct lock *t_lock = lock;
+  t->wait_on = t_lock;
+  
+  /* t waiting for t_lock */
+  while (1)
+  {
+    if (t_lock->holder && t->priority > t_lock->priority)    
+    {
+      t_lock->priority = t->priority;
+      t_lock->holder->priority = t->priority;
+        
+      /* Is lock->holder waiting on some other lock? */
+      t = t_lock->holder;
+      if (t->wait_on)
+        t_lock = t->wait_on;
+      else break;
+    }
+    else break;  
+  }
+  
   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  lock->holder = thread_current ();  
+  
+  /* CADroid: set lock priority to current thread priority and pushing 
+     lock into the holding locks list */
+  lock->priority = thread_current()->priority;
+  list_push_back (&thread_current ()->lock_list, &lock->lock_elem);
+  
+  intr_set_level (old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -220,6 +258,19 @@ lock_try_acquire (struct lock *lock)
   return success;
 }
 
+
+/* CADroid: Returns True if priority of A is LESS than
+   priority of B, false otherwise */
+bool 
+locks_priority (const struct list_elem *a_,
+		const struct list_elem *b_, void *aux UNUSED)
+{
+  const struct lock *a = list_entry (a_, struct lock, lock_elem);
+  const struct lock *b = list_entry (b_, struct lock, lock_elem);
+  
+  return a->priority < b->priority;
+}
+
 /* Releases LOCK, which must be owned by the current thread.
 
    An interrupt handler cannot acquire a lock, so it does not
@@ -231,8 +282,34 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  /* CADroid: while releasing the lock removing the lock
+     form the threads holding locks list */
+  enum intr_level old_level = intr_disable ();
+  
+  /* CADroid: Setting the lock priority to the waiting threads 
+     list max priority */ 
+  if (!list_empty (&lock->semaphore.waiters))
+  {
+    struct list_elem *e = list_max (&lock->semaphore.waiters, priority_less, NULL);  
+    struct thread *t = list_entry (e, struct thread, elem);
+    lock->priority = t->priority;
+  }
+  list_remove (&lock->lock_elem);  
+
   lock->holder = NULL;
   sema_up (&lock->semaphore);
+
+  /* CADroid: Setting the thread priority to the holding locks max priority
+     or original priority if holds no locks */
+  if (!list_empty (&thread_current ()->lock_list))
+  {
+    struct list_elem *l = list_max (&thread_current ()->lock_list, locks_priority, NULL);
+    thread_set_temp_priority (list_entry (l, struct lock, lock_elem)->priority);
+  }
+  else 
+  thread_set_priority (thread_current ()->priority_orig);
+
+  intr_set_level (old_level);  
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -251,6 +328,7 @@ struct semaphore_elem
   {
     struct list_elem elem;              /* List element. */
     struct semaphore semaphore;         /* This semaphore. */
+    int priority;			/* CADroid: thread priority. */
   };
 
 /* Initializes condition variable COND.  A condition variable
@@ -295,10 +373,24 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
+  /* CADroid: Set waiter priority */
+  waiter.priority = thread_get_priority();
   list_push_back (&cond->waiters, &waiter.elem);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
+}
+
+/* CADroid: Returns True if priority of A is LESS than
+   priority of B, false otherwise */
+static bool 
+less_priority (const struct list_elem *a_,
+		const struct list_elem *b_, void *aux UNUSED)
+{
+  const struct semaphore_elem *a = list_entry (a_, struct semaphore_elem, elem);
+  const struct semaphore_elem *b = list_entry (b_, struct semaphore_elem, elem);
+  
+  return a->priority < b->priority;
 }
 
 /* If any threads are waiting on COND (protected by LOCK), then
@@ -316,9 +408,15 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
-                          struct semaphore_elem, elem)->semaphore);
+  /* CADroid: Signaling the higest priority waiting thread on 
+     the condition to wakeup */
+  if (!list_empty (&cond->waiters))
+  {
+    struct list_elem *e = list_max (&cond->waiters, less_priority, NULL);
+    struct semaphore_elem *s = list_entry (e, struct semaphore_elem, elem);
+    list_remove (e);
+    sema_up (&s->semaphore);
+  }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by

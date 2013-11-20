@@ -24,6 +24,16 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+/* CADroid: Nice value properties. */
+#define NICE_MIN -20			/* Minimum nice value. */
+#define NICE_DEFAULT 0			/* Default nice value. */
+#define NICE_MAX 20			/* Maximum nice value. */
+
+/* CADroid: Fixed-Point Real Arthematic 17.14 format */
+typedef int32_t fp32_t;
+#define FP32_MAX 131071
+#define fp_f 16384			/* f value */
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -89,13 +99,35 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
+    
+    /* CADroid: For timer_sleep implementation. */
+    int64_t sleep_until;		/* Sleep until this value of timer_ticks */
+    struct list_elem sleepelem;		/* List element for sleep threads list. */
+    
+    /* CADroid: For priority scheduling and donation. */
+    int priority_orig;			/* Original Priority. */
+    struct list lock_list;		/* List of all holding locks with priorities. */
+    struct lock *wait_on;		/* On which lock this thread is waiting on. */
+
+    /* CADroid: For MLFQ scheduling implementation. */
+    int nice;				/* Nice value of the thread. */
+    fp32_t recent_cpu;			/* recent cpu time. */
+    struct list_elem mlfqelem;		/* List element for MLFQ queue lists. */
+    int mlfq_priority;			/* calculated MLFQ priority. */
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
+    /* CADroid: Owned by userprog/process.c. */
+    bool user;				/* If set indicates user process */
     uint32_t *pagedir;                  /* Page directory. */
+    int exit_code;			/* Exit code */
+    struct file *prog_file;		/* Program executable file */
+    struct info_parent *childinfo;  	/* Shared info b/w child and parent */
+    struct list child_list;		/* List of childinfos */
+    struct list fd_list;		/* List of file descriptors */
+    int fd_id;				/* id for file descriptors */					
 #endif
 
     /* Owned by thread.c. */
@@ -119,6 +151,9 @@ tid_t thread_create (const char *name, int priority, thread_func *, void *);
 void thread_block (void);
 void thread_unblock (struct thread *);
 
+/* CADroid: timer_sleep function */
+void thread_sleep (void);
+
 struct thread *thread_current (void);
 tid_t thread_tid (void);
 const char *thread_name (void);
@@ -133,9 +168,14 @@ void thread_foreach (thread_action_func *, void *);
 int thread_get_priority (void);
 void thread_set_priority (int);
 
+/* CADriod: for handling priority from synch.c */
+void thread_set_temp_priority (int);
+bool priority_less (const struct list_elem *a,
+		const struct list_elem *b, void *);
+
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
-int thread_get_load_avg (void);
+int thread_get_load_avg (void); 
 
 #endif /* threads/thread.h */

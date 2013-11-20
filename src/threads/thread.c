@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -24,9 +25,23 @@
    that are ready to run but not actually running. */
 static struct list ready_list;
 
+/* CADroid: List of processes in THREAD_BLOCKED state after calling 
+   timer_sleep, i.e. processes that are sleeping for a certain ticks time. */
+static struct list sleep_list;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
+
+/* CADroid: Lists of all mlfq queues.  Processes are added to this list
+   when they are first scheduled and exchanged till they exit. */
+static struct list mlfq_list[PRI_MAX +1];
+
+/* CADroid: Number of ready threads in the mlfq queues. */
+static int ready_threads = 0;
+
+/* CADroid: load_avg value of the system. */
+static fp32_t load_avg;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -36,6 +51,23 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+
+/* CADroid: Fixed-Point Real Arthematic 17.14 format */
+static fp32_t int2fp (int32_t n) {
+  return n*fp_f; }
+
+static int32_t fp2int (fp32_t x) {
+  return x/fp_f; }
+
+static fp32_t fpadd (fp32_t x, fp32_t y) {
+  return x + y; }
+
+static fp32_t fpmul (fp32_t x, fp32_t y) {
+  return ((int64_t)x)*y/fp_f; }
+
+static fp32_t fpdiv (fp32_t x, fp32_t y) {
+  return ((int64_t)x)*fp_f/y; }
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -70,6 +102,8 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+/*CADroid: function to wakeup threads */
+static void threads_wakeup (void);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -91,13 +125,29 @@ thread_init (void)
 
   lock_init (&tid_lock);
   list_init (&ready_list);
+  /* CADroid: Sleep thread initialization */
+  list_init (&sleep_list);
   list_init (&all_list);
+  
+  /* CADroid: MLFQs and load_avg initalization. */ 
+  if (thread_mlfqs)
+  {
+    int i;
+    for(i = PRI_MIN; i < PRI_MAX +1; i++)
+      list_init (&mlfq_list[i]);
+    load_avg = int2fp (0);
+  }
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+
+#ifdef USERPROG
+  /* CADroid: Initalizing list of child processes */
+  list_init (&initial_thread->child_list); 	
+#endif
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -117,12 +167,89 @@ thread_start (void)
   sema_down (&idle_started);
 }
 
+/* CADroid: Calculates the new mlfq priority to thread. */
+static int
+calculate_mlfq_priority (struct thread *t)
+{
+  int priority = PRI_MAX;
+  priority = priority - fp2int (fpdiv (t->recent_cpu, int2fp(4)));
+  priority = priority - fp2int (fpmul (int2fp (t->nice), int2fp(2)));
+  if (priority < PRI_MIN) priority = PRI_MIN;
+  if (priority > PRI_MAX) priority = PRI_MAX;
+  return priority;
+}
+
+/* CADroid: Sets the new priority to thread and move 
+   the thread in MLFQs. */
+static void
+set_mlfq_priority (struct thread *t, int new_priority)
+{
+  if (t == idle_thread) return;
+  t->mlfq_priority = new_priority;
+  
+  if (t->status == THREAD_READY)
+  {
+    enum intr_level old_level = intr_disable ();
+    list_remove (&t->mlfqelem);
+    list_push_back (&mlfq_list[t->mlfq_priority], &t->mlfqelem);
+    intr_set_level (old_level);
+  }
+}
+
+/* CADroid: updating the thread mlfq_priority */
+static void
+update_thread_mlfq_priority (struct thread *t, void *aux UNUSED)
+{
+  set_mlfq_priority (t, calculate_mlfq_priority (t));
+}
+
+/* CADroid: updating the recent cpu value */
+static void
+update_recent_cpu (struct thread *t, void *aux UNUSED)
+{
+  fp32_t coeff = fpmul (int2fp (2), load_avg);
+  coeff = fpdiv (coeff, fpadd (coeff, int2fp (1)));
+  t->recent_cpu = fpadd (fpmul (coeff, t->recent_cpu), int2fp (t->nice));
+}
+
+/* CADroid: Making the mlfq calculations for each tick */
+static void
+mlfq_tick(void)
+{
+  struct thread *t = thread_current ();
+
+  /* Update recent_cpu for the current thread */
+  if (t != idle_thread)
+    t->recent_cpu = fpadd (t->recent_cpu, int2fp (1));
+
+  /* Update load avg and recent_cpu, once every second */
+  if (timer_ticks () % TIMER_FREQ == 0)
+  {
+    /* Update load_avg */
+    int load = ready_threads;
+    if (t != idle_thread) load++;
+    load_avg = fpadd (fpmul (fpdiv (int2fp(59), int2fp (60)), 
+                load_avg), fpdiv (int2fp (load), int2fp (60)));
+
+    /* Update recent_cpu for all threads */
+    thread_foreach (update_recent_cpu, NULL);
+
+    /* Update priority for all threads as the got changes*/
+    thread_foreach (update_thread_mlfq_priority, NULL);
+  }
+  else if (timer_ticks () % TIME_SLICE == 0)
+    /* update priority of the current thread which got changes,
+       once every 4 ticks. */
+    update_thread_mlfq_priority (t, NULL);
+}
+
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
 void
 thread_tick (void) 
 {
   struct thread *t = thread_current ();
+  enum intr_level old_level;
 
   /* Update statistics. */
   if (t == idle_thread)
@@ -133,6 +260,15 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+    
+  /* CADroid: Wakeup sleeping threads */
+  old_level = intr_disable ();  
+  threads_wakeup ();
+  intr_set_level (old_level);
+
+  /* CADroid: Giving mlfq_tick */
+  if(thread_mlfqs)
+    mlfq_tick();
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -183,6 +319,31 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+  /* CADroid: Initalize mlfq parameters */
+  struct thread *cur = thread_current ();
+  t->nice = cur->nice;
+  t->recent_cpu = cur->recent_cpu;
+  t->mlfq_priority = cur->mlfq_priority;
+
+#ifdef USERPROG
+  /* CADroid: Initalize user prog parameters */
+  t->user = false;
+  t->prog_file = NULL;
+  list_init (&t->child_list);
+  
+  list_init (&t->fd_list);
+  /* initalize fd_id to 2, 0 and 1 are predefined */
+  t->fd_id = 2;
+  
+  /*create the childinfo for parent block and push into
+  	list of parent, child_list */
+  if(!create_childinfo (t))
+  {
+    palloc_free_page (t);
+    return TID_ERROR;
+  }
+#endif
+
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -240,14 +401,72 @@ void
 thread_unblock (struct thread *t) 
 {
   enum intr_level old_level;
-
   ASSERT (is_thread (t));
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_push_back (&ready_list, &t->elem);
+
   t->status = THREAD_READY;
+  /* CADroid: Pushing the unblocked thread into ready list 
+     or mlfq_lists and yeilding if the unblocked thread 
+     priority is high */
+  struct thread *r = running_thread ();  
+  if (!thread_mlfqs) {
+    list_push_back (&ready_list, &t->elem);
+    if (r != idle_thread && r->priority < t->priority)
+      thread_yield();
+  }
+  else
+  {
+    list_push_back (&mlfq_list[t->mlfq_priority], &t->mlfqelem);
+    ready_threads++;
+  }
+
   intr_set_level (old_level);
+}
+
+/* CADroid: This function pushes the running thread into sleep_list */ 
+void 
+thread_sleep (void)
+{
+  struct thread *cur = thread_current ();
+  struct list_elem *e;
+  enum intr_level old_level = intr_disable ();
+  
+  e = list_begin (&sleep_list);
+  while (e != list_end (&sleep_list)) 
+  {
+    if (list_entry (e, struct thread, sleepelem)->sleep_until < cur->sleep_until)
+       e = list_next (e);
+    else break;
+  }
+  list_insert (e, &cur->sleepelem);  
+  thread_block ();
+  intr_set_level (old_level);
+}
+
+/* CADroid: Wakes up the sleeping threads which completed the ticks */
+static void
+threads_wakeup (void)
+{
+  if (list_empty (&sleep_list)) return;
+  struct list_elem *e = list_begin (&sleep_list);
+  struct thread *t = list_entry (e, struct thread, sleepelem);
+  if (t->sleep_until > timer_ticks ()) return;
+  
+  while (e != list_end (&sleep_list))
+  {
+    t = list_entry (e, struct thread, sleepelem);
+    ASSERT (is_thread (t));
+    ASSERT (t->status == THREAD_BLOCKED);
+    if (t->sleep_until <= timer_ticks ())
+    {
+      t->sleep_until = 0;
+      thread_unblock (t);
+      e = list_remove(e);
+    }
+    else return;
+  }  
 }
 
 /* Returns the name of the running thread. */
@@ -289,15 +508,26 @@ void
 thread_exit (void) 
 {
   ASSERT (!intr_context ());
-
+  
 #ifdef USERPROG
-  process_exit ();
+  /* CADroid: cleaning the user prog data */ 
+  if (thread_current ()->user)
+    process_exit ();
 #endif
+
+  intr_disable ();
+  
+  /* CADroid: Release all the locks holded by the thread. */
+  while (!list_empty (&thread_current ()->lock_list))
+  {
+    struct list_elem *l = list_pop_front (&thread_current ()->lock_list);
+    lock_release (list_entry (l, struct lock, lock_elem));
+  }
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
-  intr_disable ();
+
   list_remove (&thread_current()->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
@@ -315,8 +545,18 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_push_back (&ready_list, &cur->elem);
+  /* CADroid: Pushing the yielding thread into ready list
+    or mlfq_lists */
+  if (cur != idle_thread)
+  { 
+    if(!thread_mlfqs) 
+      list_push_back (&ready_list, &cur->elem);
+    else
+    {
+      list_push_back (&mlfq_list[cur->mlfq_priority], &cur->mlfqelem);
+      ready_threads++;
+    }
+  }
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -339,11 +579,57 @@ thread_foreach (thread_action_func *func, void *aux)
     }
 }
 
-/* Sets the current thread's priority to NEW_PRIORITY. */
+/* Sets the current thread's priority to NEW_PRIORITY. Checks if the
+   new priority is less than current and updates to maximum priority 
+   of the locks being held by current thread or the NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) 
+{ 
+  struct thread *t = thread_current();
+  struct list_elem *e;
+  int temp_priority = 0;
+  enum intr_level old_level;
+
+  old_level = intr_disable ();  
+  
+  if (new_priority < t->priority)
+  {
+    if (!list_empty (&t->lock_list))
+    {
+      e = list_max (&t->lock_list, locks_priority, NULL);
+      temp_priority = list_entry (e, struct lock, lock_elem)->priority;    
+    }
+    if (temp_priority > new_priority)
+        t->priority = temp_priority;
+    else t->priority = new_priority;
+  }
+  else t->priority = new_priority;
+   
+  t->priority_orig = new_priority;
+  intr_set_level (old_level);  
+  
+  /* Yeilding if there is higher priority thread waiting */
+  if (!list_empty (&ready_list))
+  {
+    e = list_max (&ready_list, priority_less, NULL);
+    t = list_entry (e, struct thread, elem);
+    if (new_priority < t->priority)
+      thread_yield();
+  }
+}
+
+/* CADroid: Sets the current thread's priority to NEW_PRIORITY temporarily. */
+void
+thread_set_temp_priority (int new_priority)
 {
   thread_current ()->priority = new_priority;
+  if (!list_empty (&ready_list))
+  {
+    struct list_elem *e = list_max (&ready_list, priority_less, NULL);
+    struct thread *t = list_entry (e, struct thread, elem);
+    if (new_priority < t->priority)
+      thread_yield();
+  }
 }
 
 /* Returns the current thread's priority. */
@@ -353,37 +639,60 @@ thread_get_priority (void)
   return thread_current ()->priority;
 }
 
-/* Sets the current thread's nice value to NICE. */
-void
-thread_set_nice (int nice UNUSED) 
+/* CADroid: Returns the highest priority thread from the MLFQ queues. */
+static struct thread *
+highest_mlfq_priority_thread(void)
 {
-  /* Not yet implemented. */
+  int i;
+  for (i = PRI_MAX; i >= PRI_MIN; i--)
+  {
+    if (!list_empty(&mlfq_list[i]))
+      return list_entry (list_begin (&mlfq_list[i]), struct thread, mlfqelem);
+  }
+  return NULL;
 }
 
-/* Returns the current thread's nice value. */
+/* CADroid: Sets the current thread's nice value to NICE. */
+void
+thread_set_nice (int new_nice) 
+{
+  struct thread *t = thread_current ();
+  if (t == idle_thread) return;
+  if (new_nice < NICE_MIN) new_nice = NICE_MIN;
+  if (new_nice > NICE_MAX) new_nice = NICE_MAX;
+  enum intr_level old_level = intr_disable ();
+  t->nice = new_nice;
+  
+  /* calculate the priority and if not highest yeild*/
+  set_mlfq_priority (t, calculate_mlfq_priority(t));
+  struct thread *h = highest_mlfq_priority_thread();
+  if(h != NULL)
+    if (h->mlfq_priority > t->mlfq_priority)
+      thread_yield();
+  intr_set_level (old_level);
+}
+
+/* CADroid: Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()->nice;
 }
 
-/* Returns 100 times the system load average. */
+/* CADroid: Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return fp2int (fpmul (int2fp(100), load_avg));
 }
 
-/* Returns 100 times the current thread's recent_cpu value. */
+/* CADroid: Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return fp2int (fpmul (int2fp (100), thread_current ()->recent_cpu));
 }
-
+
 /* Idle thread.  Executes when no other thread is ready to run.
 
    The idle thread is initially put on the ready list by
@@ -468,6 +777,16 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+  /* CADroid: Initalization of the parameters added */
+  t->sleep_until = 0;
+  t->priority_orig = priority;
+  list_init (&t->lock_list);
+  t->wait_on = NULL;
+  t->nice = NICE_DEFAULT;
+  t->recent_cpu = int2fp (0);
+  t->mlfq_priority = priority;
+ 
   t->magic = THREAD_MAGIC;
   list_push_back (&all_list, &t->allelem);
 }
@@ -485,18 +804,51 @@ alloc_frame (struct thread *t, size_t size)
   return t->stack;
 }
 
-/* Chooses and returns the next thread to be scheduled.  Should
-   return a thread from the run queue, unless the run queue is
-   empty.  (If the running thread can continue running, then it
+/* CADroid: Returns True if priority of A is LESS than
+   priority of B, false otherwise */
+bool 
+priority_less (const struct list_elem *a_,
+		const struct list_elem *b_, void *aux UNUSED)
+{
+  const struct thread *a = list_entry (a_, struct thread, elem);
+  const struct thread *b = list_entry (b_, struct thread, elem);
+  
+  return a->priority < b->priority;
+}
+
+/* CADroid: Chooses and returns the next thread to be scheduled.  
+   Should return a thread from the run queue, unless the run queue 
+   is empty. (If the running thread can continue running, then it
    will be in the run queue.)  If the run queue is empty, return
    idle_thread. */
 static struct thread *
 next_thread_to_run (void) 
 {
-  if (list_empty (&ready_list))
-    return idle_thread;
+  struct thread *t;
+  struct list_elem *e;
+  if(!thread_mlfqs)
+  {
+    if (list_empty (&ready_list))
+      return idle_thread;
+    else
+    {
+      e = list_max (&ready_list, priority_less, NULL);  
+      t = list_entry (e, struct thread, elem);
+      list_remove(e);
+      return t;
+    }
+  }
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+  {
+    t = highest_mlfq_priority_thread();
+    if (t != NULL)
+    {
+      ready_threads--;
+      list_remove(&t->mlfqelem);
+      return t;
+    }
+    else return idle_thread;
+  }
 }
 
 /* Completes a thread switch by activating the new thread's page
