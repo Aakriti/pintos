@@ -7,6 +7,8 @@
 #include "filesys/inode.h"
 #include "filesys/directory.h"
 
+#include "filesys/buffer-cache.h"
+
 /* Partition that contains the file system. */
 struct block *fs_device;
 
