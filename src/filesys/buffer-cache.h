@@ -28,15 +28,15 @@ struct buffer_cache_node
 };
 
 void buffer_cache_init(void);
+void buffer_cache_flush(void);
 
 struct buffer_cache_node * buffer_cache_find(block_sector_t sector);
 struct buffer_cache_node * buffer_cache_add(block_sector_t sector);
 struct buffer_cache_node * buffer_cache_evict(void);
 struct buffer_cache_node * get_buffer_cache();
 
-/* TODO: Proper arguments with size and temp buffer */
-void buffer_cache_read(block_sector_t sector);
-void buffer_cache_write(block_sector_t sector);
+void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size);
+void buffer_cache_write(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size);
 
 void buffer_cache_writeback(struct buffer_cache_node *node);
 void buffer_cache_readahead(block_sector_t sector);

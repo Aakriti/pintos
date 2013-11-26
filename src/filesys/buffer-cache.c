@@ -31,6 +31,19 @@ void buffer_cache_init(void)
   }
 }
 
+/* Function that writes back all the dirty sectors into fs_device
+   To be called from filesys_done */
+void buffer_cache_flush(void)
+{
+  int i;
+  for(i=0; i<64; i++)
+  {
+    if(buffer_cache[i].dirty_bit)
+      buffer_cache_writeback(&buffer_cache[i]);
+  }
+}
+
+
 /* Find if a particular sector exists in the cache, if not return NULL */
 struct buffer_cache_node * buffer_cache_find(block_sector_t sector)
 {
@@ -66,7 +79,7 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
 
     /* Possibly, this node might not be in the list and could be going through eviction */
     /* In that case, it's too late to do anything about it and we go ahead with getting a new buffer */
-    /* But... we should wait for the writeback to be completed to get the latest changes */
+    /* But... we should wait for the write back to be completed to get the latest changes */
 
     lock_release(&cache_list_lock);
     return node;
@@ -136,7 +149,7 @@ struct buffer_cache_node * get_buffer_cache()
 
 
   lock_acquire(&node->buffer_lock);
-  /* If dirty node is returned, writeback its contents */
+  /* If dirty node is returned, write back its contents */
   if(node->dirty_bit)
     buffer_cache_writeback(node);
   lock_release(&node->buffer_lock);
@@ -149,30 +162,33 @@ struct buffer_cache_node * get_buffer_cache()
   return node;
 }
 
-void buffer_cache_read(block_sector_t sector)
+void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size)
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
 
   /* Do away with locks here for concurrency */
   lock_acquire(&node->buffer_lock);
-  /* TODO: Copy contents from cache buffer into temp buffer */
-  /* Checkout inode_read_at */
+  /* Copy contents from cache buffer into user buffer */
+  memcpy (ubuffer, &node->data[sector_ofs], size);
+  node->accessed_bit = true;
   lock_release(&node->buffer_lock);
 }
 
-void buffer_cache_write(block_sector_t sector)
+void buffer_cache_write(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size)
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
 
   /* Do away with locks here for concurrency */
   lock_acquire(&node->buffer_lock);
-  /* TODO: Copy contents from temp buffer into cache buffer*/
-  /* Checkout inode_write_at */
+  /* Copy contents from user buffer into cache buffer*/
+  memcpy (&node->data[sector_ofs], ubuffer, size);
+  node->accessed_bit = true;
+  node->dirty_bit = true;
   lock_release(&node->buffer_lock);
 }
 
 /* Write the contents of cache back to the device 
-   Lock for the buffer must be held before calling writeback */
+   Lock for the buffer must be held before calling write back for concurrency */
 void buffer_cache_writeback(struct buffer_cache_node *node)
 {
   if(node == NULL)
