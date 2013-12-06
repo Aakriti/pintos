@@ -19,12 +19,10 @@ void buffer_cache_init(void)
     buffer_cache[i].dirty_bit = false;
     buffer_cache[i].accessed_bit = false;
 
-    buffer_cache[i].readers_count = 0;
-    buffer_cache[i].writers_count = 0;
+    //buffer_cache[i].readers_count = 0;
+    //buffer_cache[i].writers_count = 0;
 
     lock_init(&(buffer_cache[i].buffer_lock));
-
-    /* TODO: can initialize the cache data with all zeroes here */
 
     list_push_back(&buffer_cache_list, &(buffer_cache[i].elem));
     /* TODO: can populate hash table here for fast lookup later */
@@ -48,6 +46,7 @@ void buffer_cache_flush(void)
 struct buffer_cache_node * buffer_cache_find(block_sector_t sector)
 {
   /* TODO: could use hash table here instead of for loop */
+
   int i;
   struct buffer_cache_node *node;
   for(i=0;i<64;i++)
@@ -72,14 +71,19 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
   struct buffer_cache_node *node;
   /* Check if same sector is already present */
   node = buffer_cache_find(sector);
+
   if(node != NULL)
   {
-    /* TODO: push it to the back of the list if it already exists */
+    /* push it to the back of the list if it already exists */
     lock_acquire(&cache_list_lock);
 
     /* Possibly, this node might not be in the list and could be going through eviction */
     /* In that case, it's too late to do anything about it and we go ahead with getting a new buffer */
     /* But... we should wait for the write back to be completed to get the latest changes */
+
+    /* Remove node from current position and push it at the back */
+    list_remove(&node->elem);
+    list_push_back (&buffer_cache_list, &node->elem);
 
     lock_release(&cache_list_lock);
     return node;
@@ -104,13 +108,13 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
   node->dirty_bit = false;
   node->sector = sector;
 
-  /* TODO: Hash table updation here */
+  /* TODO: coult do hash table updation here */
 
   lock_release(&node->buffer_lock);
 
-  /* TODO: After block read completes, push node at the end of the list */
+  /* After block read completes, push node at the end of the list */
   lock_acquire(&cache_list_lock);
-
+  list_push_back (&buffer_cache_list, &node->elem);
   lock_release(&cache_list_lock);
   return node;
 }
@@ -133,6 +137,14 @@ struct buffer_cache_node * buffer_cache_evict(void)
     lock_release(&node->buffer_lock);
   }
   /* TODO: Eviction policy */
+
+  node = &buffer_cache[0];
+  lock_acquire(&node->buffer_lock);
+  if(node->dirty_bit)
+      buffer_cache_writeback(node);
+  lock_release(&node->buffer_lock);
+
+  return node;  
 }
 
 /* Get a free buffer from cache. If none is free, call eviction */
@@ -154,9 +166,9 @@ struct buffer_cache_node * get_buffer_cache()
     buffer_cache_writeback(node);
   lock_release(&node->buffer_lock);
 
-  /* TODO: Remove node from list */
+  /* Remove node from list */
   lock_acquire(&cache_list_lock);
-
+  list_remove(&node->elem);
   lock_release(&cache_list_lock);
 
   return node;
@@ -192,8 +204,9 @@ void buffer_cache_write(block_sector_t sector, uint8_t *ubuffer, int sector_ofs,
 void buffer_cache_writeback(struct buffer_cache_node *node)
 {
   if(node == NULL)
+  {
     return;
-
+  }
   /* write sector back to fs_device */
   block_write (fs_device, node->sector, node->data);
   node->accessed_bit = false;
@@ -206,8 +219,9 @@ void buffer_cache_readahead(block_sector_t sector)
 {
   /* If this is the last sector, we can't prefetch! */
   if(sector >= block_size(fs_device))
+  {
     return;
-
+  }
   /* Else, we just call buffer_add here with next sector */
   struct buffer_cache_node * node = buffer_cache_add(sector+1);
 }

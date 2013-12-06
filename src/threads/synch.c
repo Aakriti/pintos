@@ -233,8 +233,8 @@ lock_acquire (struct lock *lock)
   /* CADroid: set lock priority to current thread priority and pushing 
      lock into the holding locks list */
   lock->priority = thread_current()->priority;
-  list_push_back (&thread_current ()->lock_list, &lock->lock_elem);
   
+  list_push_back (&thread_current ()->lock_list, &lock->lock_elem);
   intr_set_level (old_level);
 }
 
