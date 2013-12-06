@@ -24,7 +24,7 @@ struct buffer_cache_node
   uint8_t data[BLOCK_SECTOR_SIZE];   /* Cached data from sector */
 
   struct list_elem elem;             /* To create eviction list */
-  struct hash_elem e;                /* To enable fast lookup; hash key is sector */
+  //struct hash_elem e;              /* To enable fast lookup; hash key is sector */
 };
 
 void buffer_cache_init(void);

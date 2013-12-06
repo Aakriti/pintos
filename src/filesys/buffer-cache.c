@@ -122,29 +122,36 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
 /* Evict one frame from buffer cache and return pointer to it */
 struct buffer_cache_node * buffer_cache_evict(void)
 {
-  int i;
   struct buffer_cache_node *node;
-  for(i=0;i<64;i++)
-  {
-    node = &buffer_cache[i];
+  struct list_elem *e = NULL, *next = NULL;
 
+  lock_acquire(&cache_list_lock);
+  for (e = list_begin (&buffer_cache_list); e != list_end (&buffer_cache_list); e = next)
+  {
+    next = list_next(e);
+    node = list_entry(e, struct buffer_cache_node, elem);
     lock_acquire(&node->buffer_lock);
+
     if(!node->accessed_bit)
     {
+      if(node->dirty_bit)
+        buffer_cache_writeback(node);
+
       lock_release(&node->buffer_lock);
+      lock_release(&cache_list_lock);
       return node;
     }
+
+    if(node->accessed_bit)
+    {
+       node->accessed_bit = false;
+       list_remove(&node->elem);
+       list_push_back (&buffer_cache_list, &node->elem);
+    }
+
     lock_release(&node->buffer_lock);
   }
-  /* TODO: Eviction policy */
-
-  node = &buffer_cache[0];
-  lock_acquire(&node->buffer_lock);
-  if(node->dirty_bit)
-      buffer_cache_writeback(node);
-  lock_release(&node->buffer_lock);
-
-  return node;  
+  lock_release(&cache_list_lock);
 }
 
 /* Get a free buffer from cache. If none is free, call eviction */

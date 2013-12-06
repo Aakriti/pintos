@@ -323,6 +323,36 @@ syscall_close (int fd)
   free (fd_ptr);
 }
 
+bool
+syscall_chdir(const char *dir)
+{
+
+}
+
+bool
+syscall_mkdir(const char *dir)
+{
+
+}
+
+bool
+syscall_readdir(int fd, char *name)
+{
+
+}
+
+bool
+syscall_isdir(int fd)
+{
+
+}
+
+int
+syscall_inumber(int fd)
+{
+
+}
+
 /* Cadroid: syscall handler modified function */
 static void
 syscall_handler (struct intr_frame *f)
@@ -397,6 +427,31 @@ syscall_handler (struct intr_frame *f)
     case SYS_CLOSE:             	/* Close a file. */
       check_memory (ptr+1, sizeof(void*));
       syscall_close((int)(*(ptr+1)));
-	  break;	  
-  }   
+      break;
+
+    case SYS_CHDIR:                     /* Change the current directory. */
+      check_memory (ptr+1, sizeof(void*));
+      *result = syscall_chdir((char *)(*(ptr+1)));
+      break;
+
+    case SYS_MKDIR:                     /* Create a directory. */
+      check_memory (ptr+1, sizeof(void*));
+      *result = syscall_mkdir((char *)(*(ptr+1)));
+      break;
+
+    case SYS_READDIR:                   /* Reads a directory entry. */
+      check_memory (ptr+1, 2*sizeof(void*));
+      *result = syscall_readdir((int)(*(ptr+1)), (char*)(*(ptr+2)));
+      break;
+
+    case SYS_ISDIR:                     /* Tests if a fd represents a directory. */
+      check_memory (ptr+1, sizeof(void*));
+      *result = syscall_isdir((int)(*(ptr+1)));
+      break;
+
+    case SYS_INUMBER:                   /* Returns the inode number for a fd. */
+      check_memory (ptr+1, sizeof(void*));
+      *result = syscall_inumber((int)(*(ptr+1)));
+      break;
+  }
 }
