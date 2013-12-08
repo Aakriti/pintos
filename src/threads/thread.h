@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "filesys/directory.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -129,6 +130,8 @@ struct thread
     struct list fd_list;		/* List of file descriptors */
     int fd_id;				/* id for file descriptors */					
 #endif
+
+    struct dir *cur_dir;
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */

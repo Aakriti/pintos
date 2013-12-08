@@ -35,6 +35,8 @@ struct inode
     block_sector_t sector;              /* Sector number of disk location. */
     int open_cnt;                       /* Number of openers. */
     bool removed;                       /* True if deleted, false otherwise. */
+    bool is_dir;                        /* CADroid: True if inode represents a dir, false otherwise */
+    block_sector_t parent;              /* CADroid: Parent pointer to implement .. in file paths */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     struct inode_disk data;             /* Inode content. */
   };
@@ -304,3 +306,11 @@ inode_length (const struct inode *inode)
 {
   return inode->data.length;
 }
+
+/* Returns true if inode represents a directory */
+bool 
+inode_is_dir(struct inode *inode)
+{
+  return inode->is_dir;
+}
+

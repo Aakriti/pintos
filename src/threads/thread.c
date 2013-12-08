@@ -15,6 +15,7 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#include "filesys/directory.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -148,6 +149,9 @@ thread_init (void)
   /* CADroid: Initalizing list of child processes */
   list_init (&initial_thread->child_list); 	
 #endif
+
+  /* CADroid: Initializing NULL as first thread's current dir */
+  initial_thread->cur_dir = NULL;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -344,6 +348,11 @@ thread_create (const char *name, int priority,
   }
 #endif
 
+  /* CADroid: setting new thread's current dir same as parent's */
+  if(cur->cur_dir != NULL)
+    t->cur_dir = dir_reopen(cur->cur_dir);
+  else
+    t->cur_dir = NULL;
 
   /* Prepare thread for first run by initializing its stack.
      Do this atomically so intermediate values for the 'stack' 
@@ -527,6 +536,8 @@ thread_exit (void)
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
      when it calls thread_schedule_tail(). */
+
+  dir_close(thread_current()->cur_dir);
 
   list_remove (&thread_current()->allelem);
   thread_current ()->status = THREAD_DYING;

@@ -7,6 +7,7 @@
 #include "filesys/inode.h"
 #include "filesys/directory.h"
 
+#include "threads/thread.h"
 #include "filesys/buffer-cache.h"
 
 /* Partition that contains the file system. */
@@ -41,7 +42,7 @@ filesys_done (void)
   buffer_cache_flush();
   free_map_close ();
 }
-
+
 /* Creates a file named NAME with the given INITIAL_SIZE.
    Returns true if successful, false otherwise.
    Fails if a file named NAME already exists,
@@ -50,7 +51,15 @@ bool
 filesys_create (const char *name, off_t initial_size) 
 {
   block_sector_t inode_sector = 0;
-  struct dir *dir = dir_open_root ();
+
+  struct thread *t = thread_current();
+  struct dir *dir = NULL;
+
+  if(t->cur_dir != NULL)
+    dir = dir_reopen(t->cur_dir);
+  else
+    dir = dir_open_root();
+
   bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
                   && inode_create (inode_sector, initial_size)
@@ -70,12 +79,24 @@ filesys_create (const char *name, off_t initial_size)
 struct file *
 filesys_open (const char *name)
 {
-  struct dir *dir = dir_open_root ();
+  struct thread *t = thread_current();
+  struct dir *dir = NULL;
   struct inode *inode = NULL;
+
+  if(!resolve_path(name, &inode))
+    return NULL;
+
+  /* Aakriti: filesys_open */
+  /*
+  if(t->cur_dir != NULL)
+    dir = dir_reopen(t->cur_dir);
+  else
+    dir = dir_open_root();
 
   if (dir != NULL)
     dir_lookup (dir, name, &inode);
   dir_close (dir);
+  */
 
   return file_open (inode);
 }
@@ -87,7 +108,16 @@ filesys_open (const char *name)
 bool
 filesys_remove (const char *name) 
 {
-  struct dir *dir = dir_open_root ();
+  struct thread *t = thread_current();
+  struct dir *dir = NULL;
+
+  if(t->cur_dir != NULL)
+    dir = dir_reopen(t->cur_dir);
+  else
+    dir = dir_open_root();
+
+  /* Aakriti: filesys_remove */
+
   bool success = dir != NULL && dir_remove (dir, name);
   dir_close (dir); 
 
@@ -104,4 +134,84 @@ do_format (void)
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");
+}
+
+
+bool
+resolve_path(const char *path, struct inode **inode)
+{
+  struct dir *dir;
+  struct thread *t = thread_current();
+
+  if(t->cur_dir != NULL)
+    dir = dir_reopen(t->cur_dir);
+  else
+    dir = dir_open_root();
+
+  char path_temp[strlen(path) + 1];
+  memcpy(path_temp, path, strlen(path) + 1);
+
+  char *token, *prev_token = NULL, *save_ptr;
+  for (token = strtok_r(path_temp, "/", &save_ptr); ; token = strtok_r (NULL, "/", &save_ptr))
+  {
+    
+    if(prev_token == NULL)
+    {
+      prev_token = token;
+      goto next;
+    }
+
+    /* check for . and .. */
+    if(strcmp(prev_token,".") == 0)
+    {
+      goto next;
+    }
+    if(strcmp(prev_token,"..") == 0)
+    {
+      //*inode = dir_get_inode(dir);
+      //set dir to parent dir
+      printf("\n********* .. *********\n");
+      goto next;
+    }
+
+    if(dir_lookup (dir, prev_token, inode))
+    {
+      if(token != NULL)
+      {
+        /* this isn't last token in the pathname */
+        if(!inode_is_dir(*inode))
+        {
+          /* only the last token is allowed to be not a dir */
+          inode_close(*inode);
+          *inode = NULL;
+          dir_close(dir);
+          return false;
+        }
+        else
+        {
+          /* jump into next directory */
+          dir_close(dir);
+          dir = dir_open(*inode);
+        }
+      }
+      else
+      {
+        /* last token in the pathname: maybe be file or dir */
+        dir_close(dir);
+        return true;
+      }
+    }
+    else
+    {
+      inode_close(*inode);
+      *inode = NULL;
+      dir_close(dir);
+      return false;
+    }
+
+    next:
+      prev_token = token;
+  }
+
+  return false;
 }

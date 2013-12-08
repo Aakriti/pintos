@@ -127,10 +127,10 @@ syscall_remove (const char *file)
   bool result;
   check_file (file);
   check_memory ((void*)file, strlen (file));
-  
+
   lock_acquire (&file_lock);
   result = filesys_remove (file);
-  lock_release (&file_lock);
+  lock_release (&file_lock);  
   return result;
 }
 
@@ -141,15 +141,30 @@ syscall_open (const char *filename)
   check_file (filename);
   int len =  strlen (filename);
   check_memory ((void*)filename, len);
-  
-  struct file *file;
-  lock_acquire (&file_lock);
-  file =  filesys_open (filename);
-  lock_release (&file_lock);
-  if (file == NULL) return -1;
+  struct file *file = NULL;
+  struct dir *dir = NULL;
+  struct inode *inode = NULL; 
 
-  /* file_dscptr is initalized and is pushed into
-    fd_list of the current thread */
+  if(!resolve_path(filename, &inode))
+    return -1;
+ 
+  /* Aakriti: change here(!) */ 
+  if(inode != NULL && !inode_is_dir(inode))
+  {
+    printf("check dir\n");
+    dir = dir_open(inode);
+    if (dir == NULL) return -1;
+  }
+  else
+  { 
+    lock_acquire (&file_lock);
+    file = file_open(inode);
+    lock_release (&file_lock);
+    if (file == NULL) return -1;
+  }
+
+  /* file dscptr is initalized and is pushed into
+    fd list of the current thread */
   struct file_dscptr *fd_ptr;
   struct thread *t = thread_current ();
   
@@ -157,7 +172,11 @@ syscall_open (const char *filename)
   if (fd_ptr == NULL) return -1;
   
   fd_ptr->fd_id = t->fd_id++;
-  fd_ptr->file = file;
+
+  if(file != NULL)
+    fd_ptr->file = file;
+  else
+    fd_ptr->dir = dir;
 
   /* push into the fd_list the created file descriptor */
   list_push_back (&t->fd_list, &fd_ptr->elem);
@@ -191,10 +210,9 @@ static int
 syscall_filesize (int fd)
 {
   int length;
-  struct file_dscptr *fd_ptr;
-  fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
   
-  if(fd_ptr == NULL) 
+  if(fd_ptr == NULL || fd_ptr->file == NULL) 
     return -1;
   else
   {
@@ -221,13 +239,13 @@ syscall_read (int fd, void *buffer_, unsigned size)
       buffer[count] = input_getc ();
       count++;
     }
+    return count;
   }
   else
   {
-    struct file_dscptr *fd_ptr;
-    fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
+    struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
 
-    if(fd_ptr == NULL) 
+    if(fd_ptr == NULL || fd_ptr->file == NULL) 
       return count;
     else 
     {
@@ -237,14 +255,13 @@ syscall_read (int fd, void *buffer_, unsigned size)
       return count;
     }
   }
-  return count;
 }
 
 /* CADroid: Write to a file. */
 static int
 syscall_write (int fd, const void *buffer, unsigned size)
 {
-  int count;
+  int count = 0;
   check_memory ((void*)buffer, size);
 
   /* Write to console if fd == 1 */
@@ -255,16 +272,15 @@ syscall_write (int fd, const void *buffer, unsigned size)
   }
   else
   {
-    struct file_dscptr *fd_ptr;
-    fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
+    struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
 
-    if(fd_ptr == NULL) 
+    if(fd_ptr == NULL || fd_ptr->file == NULL) 
       return 0;
     else
     {
       lock_acquire (&file_lock); 
       count = file_write (fd_ptr->file, buffer, size);
-      lock_release (&file_lock);    
+      lock_release (&file_lock);
       return count;
     }
   }
@@ -274,10 +290,9 @@ syscall_write (int fd, const void *buffer, unsigned size)
 static void 
 syscall_seek (int fd, unsigned position) 
 {
-  struct file_dscptr *fd_ptr;
-  fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
   
-  if(fd_ptr == NULL)
+  if(fd_ptr == NULL || fd_ptr->file == NULL)
       return;
   else
   {
@@ -292,10 +307,9 @@ static unsigned
 syscall_tell (int fd)
 {
   int pos;
-  struct file_dscptr *fd_ptr;
-  fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
   
-  if(fd_ptr == NULL)
+  if(fd_ptr == NULL || fd_ptr->file == NULL)
       return -1;
   else
   {
@@ -310,47 +324,110 @@ syscall_tell (int fd)
 void 
 syscall_close (int fd)
 {  
-  struct file_dscptr *fd_ptr;
-  fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
    
   if(fd_ptr == NULL) return;
   
+  if(fd_ptr->file != NULL)
+  {
+    lock_acquire (&file_lock);
+    file_close (fd_ptr->file);
+    lock_release (&file_lock);
+  }
+  else
+    dir_close(fd_ptr->dir);
+
   /* Clean up the memory */
-  lock_acquire (&file_lock);
-  file_close (fd_ptr->file);
-  lock_release (&file_lock);
   list_remove (&fd_ptr->elem);
   free (fd_ptr);
 }
 
+/* CADroid: Changes current working directory of the process to dir, 
+   (relative or absolute). Returns true if successful, false on failure. */
 bool
 syscall_chdir(const char *dir)
 {
+  struct inode *inode;
+  if(!resolve_path(dir, &inode))
+    return false;
 
+  if(inode_is_dir(inode))
+  {
+    struct thread *t = thread_current();
+    dir_close(t->cur_dir);
+    t->cur_dir = dir_open(inode);
+    return true;
+  }
+  else
+  {
+    inode_close(inode);
+    return false;
+  }
 }
 
+/* CADroid: Creates the directory named dir, (relative or absolute)
+   Returns true if successful, false on failure. */
 bool
 syscall_mkdir(const char *dir)
 {
+  /* Fails if dir already exists 
+     or if any directory name in dir, besides the last, does not already exist. 
+     That is, mkdir("/a/b/c") succeeds only if /a/b already exists and /a/b/c does not. */
 
+  /* Aakriti: mkdir */
 }
 
+/* CADroid: Reads a directory entry from file descriptor fd, which must represent a directory
+   if successful, stores the null-terminated file name in name 
+   If no entries are left in the directory, returns false. */
 bool
 syscall_readdir(int fd, char *name)
 {
-
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
+  
+  if(fd_ptr->file != NULL)
+    return false;
+  else
+    return dir_readdir(fd_ptr->dir, name);
 }
 
+/* CADroid: Returns true if fd represents a directory, 
+   false if it represents an ordinary file */
 bool
 syscall_isdir(int fd)
 {
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
 
+  /*
+  struct inode *inode;
+  if(fd_ptr->file != NULL)
+    inode = file_get_inode(fd_ptr->file);
+  else
+    inode = dir_get_inode(fd_ptr->dir);
+
+  return inode_is_dir(inode);
+  */
+
+  if(fd_ptr->file != NULL)
+    return false;
+  else
+    return true;
 }
 
+/* CADroid: Returns the inode number of the inode associated with fd, 
+   which may represent an ordinary file or a directory. */
 int
 syscall_inumber(int fd)
 {
+  struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
+  struct inode *inode;
 
+  if(fd_ptr->file != NULL)
+    inode = file_get_inode(fd_ptr->file);
+  else
+    inode = dir_get_inode(fd_ptr->dir);
+
+  return inode_get_inumber(inode);
 }
 
 /* Cadroid: syscall handler modified function */

@@ -22,6 +22,7 @@ struct file_dscptr
 {
   int fd_id;						/* unique file descriptor id */
   struct file *file;					/* file pointer */
+  struct dir *dir;                                      /* dir pointer */
   struct list_elem elem;				/* list element to hold in fd_list */
 };
   

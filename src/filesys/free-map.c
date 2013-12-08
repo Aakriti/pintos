@@ -83,3 +83,10 @@ free_map_create (void)
   if (!bitmap_write (free_map, free_map_file))
     PANIC ("can't write free map");
 }
+
+/* Tests if a given sector is allocated or not */
+bool
+free_map_test (block_sector_t sector)
+{
+  return bitmap_test (free_map, sector);
+}
