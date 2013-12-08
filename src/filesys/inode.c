@@ -7,7 +7,7 @@
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
-
+/*CHECKING MERGING AND BRANCHING */
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
