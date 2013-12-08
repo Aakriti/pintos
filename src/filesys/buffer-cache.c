@@ -1,4 +1,8 @@
 #include "filesys/buffer-cache.h"
+#include <stdio.h>
+#include "threads/malloc.h"
+#include <string.h>
+#include "filesys/free-map.h"
 
 struct list buffer_cache_list;
 struct lock cache_list_lock;  /* for atomic buffer_cache_list manipulation */
@@ -25,7 +29,6 @@ void buffer_cache_init(void)
     lock_init(&(buffer_cache[i].buffer_lock));
 
     list_push_back(&buffer_cache_list, &(buffer_cache[i].elem));
-    /* TODO: can populate hash table here for fast lookup later */
   }
 }
 
@@ -41,12 +44,35 @@ void buffer_cache_flush(void)
   }
 }
 
+/* Frees up a buffer cache node. Can be called when that sector is being
+   cleared out */
+void buffer_cache_free_node(block_sector_t sector)
+{
+  struct buffer_cache_node *node;
+  node = buffer_cache_find(sector);
+
+  if(node == NULL)
+    return;
+
+  lock_acquire(&node->buffer_lock);
+  node->accessed_bit = false;
+  node->dirty_bit = false; 
+  node->sector = block_size(fs_device) + 1;
+  lock_release(&node->buffer_lock);
+
+  lock_acquire(&cache_list_lock);
+  lock_acquire(&node->buffer_lock);
+
+  list_remove(&node->elem);
+  list_push_front(&buffer_cache_list, &node->elem);
+
+  lock_release(&node->buffer_lock);
+  lock_release(&cache_list_lock);
+}
 
 /* Find if a particular sector exists in the cache, if not return NULL */
 struct buffer_cache_node * buffer_cache_find(block_sector_t sector)
 {
-  /* TODO: could use hash table here instead of for loop */
-
   int i;
   struct buffer_cache_node *node;
   for(i=0;i<64;i++)
@@ -69,6 +95,11 @@ struct buffer_cache_node * buffer_cache_find(block_sector_t sector)
 struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
 {
   struct buffer_cache_node *node;
+
+  /* Make sure the sector is present on disk */
+//  if(!free_map_test(sector))
+//    return NULL;
+
   /* Check if same sector is already present */
   node = buffer_cache_find(sector);
 
@@ -83,7 +114,7 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
 
     /* Remove node from current position and push it at the back */
     list_remove(&node->elem);
-    list_push_back (&buffer_cache_list, &node->elem);
+    list_push_back(&buffer_cache_list, &node->elem);
 
     lock_release(&cache_list_lock);
     return node;
@@ -108,13 +139,11 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
   node->dirty_bit = false;
   node->sector = sector;
 
-  /* TODO: coult do hash table updation here */
-
   lock_release(&node->buffer_lock);
 
   /* After block read completes, push node at the end of the list */
   lock_acquire(&cache_list_lock);
-  list_push_back (&buffer_cache_list, &node->elem);
+  list_push_back(&buffer_cache_list, &node->elem);
   lock_release(&cache_list_lock);
   return node;
 }
@@ -122,29 +151,37 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
 /* Evict one frame from buffer cache and return pointer to it */
 struct buffer_cache_node * buffer_cache_evict(void)
 {
-  int i;
   struct buffer_cache_node *node;
-  for(i=0;i<64;i++)
-  {
-    node = &buffer_cache[i];
+  struct list_elem *e = NULL, *next = NULL;
 
+  lock_acquire(&cache_list_lock);
+  for (e = list_begin (&buffer_cache_list); e != list_end (&buffer_cache_list); e = next)
+  {
+    next = list_next(e);
+    node = list_entry(e, struct buffer_cache_node, elem);
     lock_acquire(&node->buffer_lock);
+
     if(!node->accessed_bit)
     {
+      if(node->dirty_bit)
+        buffer_cache_writeback(node);
+
       lock_release(&node->buffer_lock);
+      lock_release(&cache_list_lock);
       return node;
     }
+
+    if(node->accessed_bit)
+    {
+       node->accessed_bit = false;
+       list_remove(&node->elem);
+       list_push_back(&buffer_cache_list, &node->elem);
+    }
+
     lock_release(&node->buffer_lock);
   }
-  /* TODO: Eviction policy */
-
-  node = &buffer_cache[0];
-  lock_acquire(&node->buffer_lock);
-  if(node->dirty_bit)
-      buffer_cache_writeback(node);
-  lock_release(&node->buffer_lock);
-
-  return node;  
+  lock_release(&cache_list_lock);
+  return NULL;
 }
 
 /* Get a free buffer from cache. If none is free, call eviction */
@@ -186,7 +223,7 @@ void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, 
   lock_release(&node->buffer_lock);
 }
 
-void buffer_cache_write(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size)
+void buffer_cache_write(block_sector_t sector, const uint8_t *ubuffer, int sector_ofs, int size)
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
 
@@ -211,6 +248,7 @@ void buffer_cache_writeback(struct buffer_cache_node *node)
   block_write (fs_device, node->sector, node->data);
   node->accessed_bit = false;
   node->dirty_bit = false;
+  node->sector = block_size(fs_device) + 1;
 }
 
 
@@ -218,10 +256,10 @@ void buffer_cache_writeback(struct buffer_cache_node *node)
 void buffer_cache_readahead(block_sector_t sector)
 {
   /* If this is the last sector, we can't prefetch! */
-  if(sector >= block_size(fs_device))
+  if(sector > block_size(fs_device))
   {
     return;
   }
-  /* Else, we just call buffer_add here with next sector */
-  struct buffer_cache_node * node = buffer_cache_add(sector+1);
+  /* Else, we just call buffer_add here with sector */
+  buffer_cache_add(sector);
 }
