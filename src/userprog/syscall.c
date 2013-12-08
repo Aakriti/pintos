@@ -148,8 +148,7 @@ syscall_open (const char *filename)
   if(!resolve_path(filename, &inode))
     return -1;
  
-  /* Aakriti: change here(!) */ 
-  if(inode != NULL && !inode_is_dir(inode))
+  if(inode != NULL && inode_is_dir(inode))
   {
     printf("check dir\n");
     dir = dir_open(inode);

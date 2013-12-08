@@ -1,4 +1,7 @@
 #include "filesys/buffer-cache.h"
+#include <stdio.h>
+#include "threads/malloc.h"
+#include <string.h>
 #include "filesys/free-map.h"
 
 struct list buffer_cache_list;
@@ -178,6 +181,7 @@ struct buffer_cache_node * buffer_cache_evict(void)
     lock_release(&node->buffer_lock);
   }
   lock_release(&cache_list_lock);
+  return NULL;
 }
 
 /* Get a free buffer from cache. If none is free, call eviction */
@@ -219,7 +223,7 @@ void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, 
   lock_release(&node->buffer_lock);
 }
 
-void buffer_cache_write(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, int size)
+void buffer_cache_write(block_sector_t sector, const uint8_t *ubuffer, int sector_ofs, int size)
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
 
@@ -256,6 +260,6 @@ void buffer_cache_readahead(block_sector_t sector)
   {
     return;
   }
-  /* Else, we just call buffer_add here with next sector */
-  struct buffer_cache_node * node = buffer_cache_add(sector);
+  /* Else, we just call buffer_add here with sector */
+  buffer_cache_add(sector);
 }

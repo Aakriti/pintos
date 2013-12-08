@@ -622,10 +622,10 @@ sub run_qemu {
     print "warning: qemu doesn't support jitter\n"
       if defined $jitter;
     my (@cmd) = ('qemu');
-    push (@cmd, '-hda', $disks[0]) if defined $disks[0];
-    push (@cmd, '-hdb', $disks[1]) if defined $disks[1];
-    push (@cmd, '-hdc', $disks[2]) if defined $disks[2];
-    push (@cmd, '-hdd', $disks[3]) if defined $disks[3];
+    push (@cmd, '-drive', "file=$disks[0],index=0,media=disk,cache=writeback") if defined $disks[0];
+    push (@cmd, '-drive', "file=$disks[1],index=1,media=disk,cache=writeback") if defined $disks[1];
+    push (@cmd, '-drive', "file=$disks[2],index=2,media=disk,cache=writeback") if defined $disks[2];
+    push (@cmd, '-drive', "file=$disks[3],index=3,media=disk,cache=writeback") if defined $disks[3];
     push (@cmd, '-m', $mem);
     push (@cmd, '-net', 'none');
     push (@cmd, '-nographic') if $vga eq 'none';
