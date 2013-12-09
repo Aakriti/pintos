@@ -175,10 +175,7 @@ resolve_path(const char *path, struct inode **inode)
     }
     if(strcmp(prev_token,"..") == 0)
     {
-      //*inode = dir_get_inode(dir);
-      /* Aakriti: set dir to parent dir */
-      printf("\n********* .. *********\n");
-      goto next;
+      /* Taken care of */
     }
 
     if(dir_lookup (dir, prev_token, inode))
@@ -259,10 +256,7 @@ get_containing_folder(const char *dirname, struct dir **dir, char *tok)
     }
     if(strcmp(prev_token,"..") == 0)
     {
-      //*inode = dir_get_inode(dir);
-      /* Aakriti: set dir to parent dir */
-      printf("\n********* .. *********\n");
-      goto next;
+      /* Taken care of */
     }
 
     if(dir_lookup (*dir, prev_token, &inode))
@@ -354,10 +348,7 @@ get_dir(const char *dirname, struct dir **dir, char *tok)
     }
     if(strcmp(prev_token,"..") == 0)
     {
-      //*inode = dir_get_inode(dir);
-      /* Aakriti: set dir to parent dir */
-      printf("\n********* .. *********\n");
-      goto next;
+      /* Taken care of */
     }
 
     if(dir_lookup (*dir, prev_token, &inode))

@@ -23,8 +23,7 @@ void buffer_cache_init(void)
     buffer_cache[i].dirty_bit = false;
     buffer_cache[i].accessed_bit = false;
 
-    //buffer_cache[i].readers_count = 0;
-    //buffer_cache[i].writers_count = 0;
+    buffer_cache[i].readers_count = 0;
 
     lock_init(&(buffer_cache[i].buffer_lock));
 
@@ -214,10 +213,16 @@ void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, 
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
 
-  /* Do away with locks here for concurrency */
   lock_acquire(&node->buffer_lock);
+  node->readers_count++;
+  node->accessed_bit = true;
+  lock_release(&node->buffer_lock);
+
   /* Copy contents from cache buffer into user buffer */
   memcpy (ubuffer, &node->data[sector_ofs], size);
+
+  lock_acquire(&node->buffer_lock);
+  node->readers_count--;
   node->accessed_bit = true;
   lock_release(&node->buffer_lock);
 }
@@ -225,14 +230,26 @@ void buffer_cache_read(block_sector_t sector, uint8_t *ubuffer, int sector_ofs, 
 void buffer_cache_write(block_sector_t sector, const uint8_t *ubuffer, int sector_ofs, int size)
 {
   struct buffer_cache_node * node = buffer_cache_add(sector);
+  volatile bool success = false;
 
-  /* Do away with locks here for concurrency */
-  lock_acquire(&node->buffer_lock);
-  /* Copy contents from user buffer into cache buffer*/
-  memcpy (&node->data[sector_ofs], ubuffer, size);
-  node->accessed_bit = true;
-  node->dirty_bit = true;
-  lock_release(&node->buffer_lock);
+  while(success == false)
+  {
+    lock_acquire(&node->buffer_lock);
+    if(node->readers_count > 0)
+    {
+      lock_release(&node->buffer_lock);
+      thread_yield();
+    }
+    else
+    {
+      /* Copy contents from user buffer into cache buffer*/
+      memcpy (&node->data[sector_ofs], ubuffer, size);
+      node->accessed_bit = true;
+      node->dirty_bit = true;
+      lock_release(&node->buffer_lock);
+      success = true;
+    }
+  }
 }
 
 /* Write the contents of cache back to the device 

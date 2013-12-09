@@ -629,7 +629,7 @@ inode_get_count(struct inode *inode)
 
 /* Returns parent sector of inode */
 block_sector_t 
-inode_get_sector(struct inode *inode);
+inode_get_sector(struct inode *inode)
 {
   return inode->sector;
 }

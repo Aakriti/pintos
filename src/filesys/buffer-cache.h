@@ -15,8 +15,7 @@ struct buffer_cache_node
   bool dirty_bit;                    /* For eviction */
   bool accessed_bit;                 /* For eviction */
 
-  //int readers_count;
-  //int writers_count;
+  int readers_count;
 
   struct lock buffer_lock;
   struct list_elem elem;             /* To create eviction list */
