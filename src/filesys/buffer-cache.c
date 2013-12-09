@@ -107,10 +107,6 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
     /* push it to the back of the list if it already exists */
     lock_acquire(&cache_list_lock);
 
-    /* Possibly, this node might not be in the list and could be going through eviction */
-    /* In that case, it's too late to do anything about it and we go ahead with getting a new buffer */
-    /* But... we should wait for the write back to be completed to get the latest changes */
-
     /* Remove node from current position and push it at the back */
     list_remove(&node->elem);
     list_push_back(&buffer_cache_list, &node->elem);

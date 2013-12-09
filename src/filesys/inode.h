@@ -22,7 +22,6 @@ off_t inode_length (const struct inode *);
 
 /* CADroid: new functions */
 bool inode_is_dir(struct inode *);
-block_sector_t inode_get_parent(struct inode *);
 int inode_get_count(struct inode *);
 block_sector_t inode_get_sector(struct inode *);
 
