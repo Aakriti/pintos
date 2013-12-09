@@ -147,10 +147,9 @@ syscall_open (const char *filename)
 
   if(!resolve_path(filename, &inode))
     return -1;
- 
+    
   if(inode != NULL && inode_is_dir(inode))
   {
-    printf("check dir\n");
     dir = dir_open(inode);
     if (dir == NULL) return -1;
   }
@@ -217,7 +216,7 @@ syscall_filesize (int fd)
   {
     lock_acquire (&file_lock);
     length = file_length (fd_ptr->file);
-    lock_release (&file_lock);    
+    lock_release (&file_lock);
     return length;
   }
 }

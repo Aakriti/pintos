@@ -38,8 +38,8 @@ filesys_init (bool format)
 void
 filesys_done (void) 
 {
-  buffer_cache_flush();
   free_map_close ();
+  buffer_cache_flush();
 }
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
@@ -49,7 +49,6 @@ filesys_done (void)
 bool
 filesys_create (const char *name, off_t initial_size) 
 {
-  initial_size = initial_size & 0;
   block_sector_t inode_sector = 0;
 
   struct thread *t = thread_current();
@@ -60,6 +59,8 @@ filesys_create (const char *name, off_t initial_size)
   else
     dir = dir_open_root();
 
+  ASSERT(dir != NULL);
+
   bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
                   && inode_create (inode_sector, false)
@@ -67,6 +68,14 @@ filesys_create (const char *name, off_t initial_size)
   if (!success && inode_sector != 0) 
     free_map_release (inode_sector, 1);
   dir_close (dir);
+  struct inode *inode = inode_open (inode_sector);
+  if (initial_size > 0 && inode_write_at (inode, "", 1, initial_size - 1) != 1)
+  {
+    inode_remove (inode);
+    inode_close (inode);
+    success = false;
+  }
+  
   return success;
 }
 
@@ -137,17 +146,33 @@ do_format (void)
   printf ("done.\n");
 }
 
-
 bool
 resolve_path(const char *path, struct inode **inode)
 {
+  if(*path == '\0' || strlen (path) < 1)
+    return false;
+
   struct dir *dir;
   struct thread *t = thread_current();
 
-  if(t->cur_dir != NULL)
-    dir = dir_reopen(t->cur_dir);
-  else
+  if(strlen (path) == 1 && path[0] == '.')
+  {
     dir = dir_open_root();
+    *inode = dir_get_inode(dir);
+    dir_close(dir);
+    return true;
+  }
+  
+  if(strlen (path) == 1 &&  path[0] == '/')
+  {
+    *inode = inode_open (ROOT_DIR_SECTOR);
+    return true;
+  }
+
+  if(path[0] == '/' || t->cur_dir == NULL)
+    dir = dir_open_root();
+  else
+    dir = dir_reopen(t->cur_dir);
 
   char path_temp[strlen(path) + 1];
   memcpy(path_temp, path, strlen(path) + 1);
@@ -155,7 +180,6 @@ resolve_path(const char *path, struct inode **inode)
   char *token, *prev_token = NULL, *save_ptr;
   for (token = strtok_r(path_temp, "/", &save_ptr); ; token = strtok_r (NULL, "/", &save_ptr))
   {
-    
     if(prev_token == NULL)
     {
       prev_token = token;
@@ -170,7 +194,7 @@ resolve_path(const char *path, struct inode **inode)
     if(strcmp(prev_token,"..") == 0)
     {
       //*inode = dir_get_inode(dir);
-      //set dir to parent dir
+      /* Aakriti: set dir to parent dir */
       printf("\n********* .. *********\n");
       goto next;
     }
@@ -201,18 +225,17 @@ resolve_path(const char *path, struct inode **inode)
         dir_close(dir);
         return true;
       }
-    }
-    else
-    {
-      inode_close(*inode);
-      *inode = NULL;
-      dir_close(dir);
-      return false;
-    }
+   }
+   else
+   {
+     inode_close(*inode);
+     *inode = NULL;
+     dir_close(dir);
+     return false;
+   }
 
-    next:
-      prev_token = token;
+   next:
+     prev_token = token;
   }
-
   return false;
 }

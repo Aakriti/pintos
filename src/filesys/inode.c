@@ -7,7 +7,7 @@
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
-/*CHECKING MERGING AND BRANCHING */
+
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 
@@ -74,9 +74,8 @@ bool
 inode_create (block_sector_t sector, bool is_dir)
 {
   struct inode_disk *disk_inode = NULL;
-//  struct inode *inode;
   struct buffer_cache_node *cache_block;
-  
+
   cache_block = buffer_cache_add (sector);
   if (cache_block == NULL)
     return false;
@@ -86,16 +85,14 @@ inode_create (block_sector_t sector, bool is_dir)
   ASSERT (sizeof *disk_inode == BLOCK_SECTOR_SIZE);
   
   struct inode_disk ubuffer;
-  memset(&ubuffer, 0, BLOCK_SECTOR_SIZE);
+  memset (&ubuffer, 0, BLOCK_SECTOR_SIZE);
   disk_inode = &ubuffer;  
   disk_inode->length = 0;
   disk_inode->magic = INODE_MAGIC;
   disk_inode->inode_type = (is_dir == true)? 1 : 0;
   
-  buffer_cache_write (sector, (uint8_t *)disk_inode, 0, BLOCK_SECTOR_SIZE);
-  
-  buffer_cache_writeback(buffer_cache_add(sector));
-  buffer_cache_free_node(sector);
+  buffer_cache_write (sector, (uint8_t *)disk_inode, 0, BLOCK_SECTOR_SIZE);  
+  buffer_cache_writeback (buffer_cache_add(sector)); 
   return true;
 }
 
@@ -226,9 +223,8 @@ inode_close (struct inode *inode)
   		deallocate (inode->sector, 0); 
       }
   	  else
-  	  {
+  	  {  	  
   	    buffer_cache_writeback(buffer_cache_add(inode->sector));
-  	    buffer_cache_free_node(inode->sector);
   	  }
       free (inode);
     }
@@ -333,7 +329,6 @@ inode_read_at (struct inode *inode, void *buffer_, off_t size, off_t offset)
       offset += chunk_size;
       bytes_read += chunk_size;
     }
-
   return bytes_read;
 }
 
@@ -412,7 +407,7 @@ inode_write_zero (struct inode *inode, const void *buffer_, off_t size,
 	  }
 
       buffer_cache_write(sector_idx, buffer + bytes_written, sector_ofs, chunk_size);
-           
+
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
@@ -536,7 +531,7 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
 	  }
 
       buffer_cache_write(sector_idx, buffer + bytes_written, sector_ofs, chunk_size);
-           
+      
       /* Advance. */
       size -= chunk_size;
       offset += chunk_size;
@@ -590,8 +585,10 @@ inode_allow_write (struct inode *inode)
 off_t
 inode_length (const struct inode *inode)
 {
+//printf("+++++++++Inside inode_length finding for inode %x+++++++\n",inode);
   struct inode_disk disk_inode;
   buffer_cache_read(inode->sector, (uint8_t *)&disk_inode, 0, BLOCK_SECTOR_SIZE);
+//printf("+++++++++Returning inode_length %d+++++++\n",disk_inode.length);  
   return disk_inode.length;
 }
 
