@@ -353,7 +353,7 @@ syscall_close (int fd)
 /* CADroid: Changes current working directory of the process to dir, 
    (relative or absolute). Returns true if successful, false on failure. */
 bool
-syscall_chdir(const char *dir)
+syscall_chdir (const char *dir)
 {
   struct inode *inode;
   if(!resolve_path(dir, &inode))
@@ -388,7 +388,6 @@ syscall_mkdir(const char *dirname)
   block_sector_t parent_sector = inode_get_sector(inode);
 
   block_sector_t inode_sector = 0;
-  block_sector_t parent_sector = 1;
 
   bool success = (free_map_allocate (1, &inode_sector)
                   && dir_create (inode_sector, parent_sector)
