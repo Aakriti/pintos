@@ -141,6 +141,19 @@ inode_open (block_sector_t sector)
   buffer_cache_read(sector, (uint8_t *)&disk_inode, 0, BLOCK_SECTOR_SIZE);
   inode->is_dir = (disk_inode.inode_type == 1)? 1:0;
   
+  if(inode->is_dir)
+  {
+    struct inode* p_inode;
+    struct dir *dir;
+    
+    dir = dir_open(inode);
+    ASSERT (dir != NULL );
+    if (dir_lookup (dir, "..", &p_inode))
+      inode->parent = p_inode->sector;
+  }
+  else
+    inode->parent = 1;
+  
   lock_release (&open_inodes_lock);
   return inode;
 }
@@ -603,6 +616,7 @@ inode_is_dir(struct inode *inode)
 block_sector_t 
 inode_get_parent(struct inode *inode)
 {
+  ASSERT (inode->is_dir == true);
   return inode->parent;
 }
 

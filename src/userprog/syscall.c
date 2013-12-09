@@ -388,6 +388,7 @@ syscall_mkdir(const char *dirname)
   block_sector_t parent_sector = inode_get_sector(inode);
 
   block_sector_t inode_sector = 0;
+  block_sector_t parent_sector = 1;
 
   bool success = (free_map_allocate (1, &inode_sector)
                   && dir_create (inode_sector, parent_sector)

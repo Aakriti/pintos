@@ -49,6 +49,9 @@ filesys_done (void)
 bool
 filesys_create (const char *name, off_t initial_size) 
 {
+  if (strlen(name) > NAME_MAX)
+    return false;
+
   block_sector_t inode_sector = 0;
   struct dir *dir;
   char token[strlen(name) + 1];
@@ -119,7 +122,7 @@ do_format (void)
   printf ("Formatting file system...");
   free_map_create ();
   
-  if (!dir_create (ROOT_DIR_SECTOR, true))
+  if (!dir_create (ROOT_DIR_SECTOR, ROOT_DIR_SECTOR))
     PANIC ("root directory creation failed");
   free_map_close ();
   printf ("done.\n");

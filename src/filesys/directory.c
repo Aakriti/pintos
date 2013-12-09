@@ -21,13 +21,37 @@ struct dir_entry
     bool in_use;                        /* In use or free? */
   };
 
-/* Creates a directory with space for ENTRY_CNT entries in the
-   given SECTOR.  Returns true if successful, false on failure. */
+/* Creates a directory for the given SECTOR.  Sets the parent directory as
+  the P_SECTOR(PARENT SECTOR) inode. Returns true if successful, false on failure. */
 bool
-dir_create (block_sector_t sector, size_t entry_cnt)
+dir_create (block_sector_t sector, block_sector_t p_sector)
 {
-  entry_cnt = entry_cnt & 0;
-  return inode_create (sector, true);
+  struct inode* inode;
+  if (inode_create (sector, true))
+  {
+    inode = inode_open (sector);
+    ASSERT (inode != NULL);
+    
+    struct dir_entry e[2];
+    /* Making the current directory entry */
+    e[0].in_use = true;
+    strlcpy (e[0].name, ".", sizeof e[0].name);
+    e[0].inode_sector = sector;
+    /* Making the parent directory entry */
+    e[1].in_use = true;
+    strlcpy (e[1].name, "..", sizeof e[1].name);
+    e[1].inode_sector = p_sector;
+    
+    if (inode_write_at (inode, &e, sizeof e, 0) != sizeof e)
+    {
+      inode_remove (inode);
+      inode_close (inode);
+      return false;
+    }
+    else
+      return true;
+  }
+  return false;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -36,7 +60,7 @@ struct dir *
 dir_open (struct inode *inode) 
 {
   struct dir *dir = calloc (1, sizeof *dir);
-  if (inode != NULL && dir != NULL)
+  if (inode != NULL && dir != NULL && inode_is_dir(inode))
     {
       dir->inode = inode;
       dir->pos = 0;
@@ -194,6 +218,11 @@ dir_remove (struct dir *dir, const char *name)
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
+  /* Rejecting the call to delete the current dir (.) and 
+    parent (..) directory entry. */
+  if (!strcmp(name, ".") || !strcmp(name, ".."))
+    return success;  
+
   /* Find directory entry. */
   if (!lookup (dir, name, &e, &ofs))
     goto done;
@@ -254,11 +283,11 @@ dir_readdir (struct dir *dir, char name[NAME_MAX + 1])
   while (inode_read_at (dir->inode, &e, sizeof e, dir->pos) == sizeof e) 
     {
       dir->pos += sizeof e;
-      if (e.in_use)
+      if (e.in_use && strcmp (e.name, ".") && strcmp (e.name, ".."))
         {
           strlcpy (name, e.name, NAME_MAX + 1);
           return true;
-        } 
+        }
     }
   return false;
 }
