@@ -353,7 +353,7 @@ syscall_close (int fd)
 /* CADroid: Changes current working directory of the process to dir, 
    (relative or absolute). Returns true if successful, false on failure. */
 bool
-syscall_chdir(const char *dir)
+syscall_chdir (const char *dir)
 {
   struct inode *inode;
   if(!resolve_path(dir, &inode))
