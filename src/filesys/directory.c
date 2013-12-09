@@ -121,7 +121,6 @@ dir_lookup (const struct dir *dir, const char *name,
             struct inode **inode) 
 {
   struct dir_entry e;
-
   ASSERT (dir != NULL);
   ASSERT (name != NULL);
 
@@ -200,6 +199,10 @@ dir_remove (struct dir *dir, const char *name)
   /* Open inode. */
   inode = inode_open (e.inode_sector);
   if (inode == NULL)
+    goto done;
+
+  /* Aakriti: check here if the inode is a non empty dir and goto done in that case */
+  if(inode_is_dir(inode))
     goto done;
 
   /* Erase directory entry. */

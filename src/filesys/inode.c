@@ -602,3 +602,9 @@ inode_is_dir(struct inode *inode)
   return inode->is_dir;
 }
 
+/* Returns parent sector of inode */
+block_sector_t 
+inode_get_parent(struct inode *inode)
+{
+  return inode->parent;
+}

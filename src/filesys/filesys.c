@@ -51,21 +51,18 @@ filesys_create (const char *name, off_t initial_size)
 {
   initial_size = initial_size & 0;
   block_sector_t inode_sector = 0;
+  struct dir *dir;
+  char token[strlen(name) + 1];
 
-  struct thread *t = thread_current();
-  struct dir *dir = NULL;
-
-  if(t->cur_dir != NULL)
-    dir = dir_reopen(t->cur_dir);
-  else
-    dir = dir_open_root();
+  if(!get_containing_folder(name, &dir, token))
+    return false;
 
   bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
                   && inode_create (inode_sector, false)
-                  && dir_add (dir, name, inode_sector));
+                  && dir_add (dir, token, inode_sector));
   if (!success && inode_sector != 0) 
-    free_map_release (inode_sector, 1);
+  free_map_release (inode_sector, 1);
   dir_close (dir);
   return success;
 }
@@ -78,25 +75,10 @@ filesys_create (const char *name, off_t initial_size)
 struct file *
 filesys_open (const char *name)
 {
-  struct thread *t = thread_current();
-  struct dir *dir = NULL;
   struct inode *inode = NULL;
 
   if(!resolve_path(name, &inode))
     return NULL;
-
-  /* Aakriti: filesys_open */
-  /*
-  if(t->cur_dir != NULL)
-    dir = dir_reopen(t->cur_dir);
-  else
-    dir = dir_open_root();
-
-  if (dir != NULL)
-    dir_lookup (dir, name, &inode);
-
-  dir_close (dir);
-  */
 
   return file_open (inode);
 }
@@ -110,15 +92,12 @@ filesys_remove (const char *name)
 {
   struct thread *t = thread_current();
   struct dir *dir = NULL;
+  char token[strlen(name) + 1];
 
-  if(t->cur_dir != NULL)
-    dir = dir_reopen(t->cur_dir);
-  else
-    dir = dir_open_root();
+  if(!get_containing_folder(name, &dir, token))
+    return false;
 
-  /* Aakriti: filesys_remove */
-
-  bool success = dir != NULL && dir_remove (dir, name);
+  bool success = dir != NULL && dir_remove (dir, token);
   dir_close (dir); 
 
   return success;
@@ -141,13 +120,34 @@ do_format (void)
 bool
 resolve_path(const char *path, struct inode **inode)
 {
+  //printf("__resolving__'%s'__\n", path);
+
+  if(*path == '\0' || strlen (path) < 1)
+    return false;
+
   struct dir *dir;
   struct thread *t = thread_current();
 
-  if(t->cur_dir != NULL)
-    dir = dir_reopen(t->cur_dir);
-  else
+  if(strlen (path) == 1 &&  *path == '/')
+  {
     dir = dir_open_root();
+    *inode = dir_get_inode(dir);
+    dir_close(dir);
+    return true;
+  }
+
+  if(strlen (path) == 1 && *path == '.')
+  {
+    dir = dir_reopen(t->cur_dir);
+    *inode = dir_get_inode(dir);
+    dir_close(dir);
+    return true;
+  }
+
+  if(path[0] == '/' || t->cur_dir == NULL)
+    dir = dir_open_root();
+  else
+    dir = dir_reopen(t->cur_dir);
 
   char path_temp[strlen(path) + 1];
   memcpy(path_temp, path, strlen(path) + 1);
@@ -170,7 +170,7 @@ resolve_path(const char *path, struct inode **inode)
     if(strcmp(prev_token,"..") == 0)
     {
       //*inode = dir_get_inode(dir);
-      //set dir to parent dir
+      /* Aakriti: set dir to parent dir */
       printf("\n********* .. *********\n");
       goto next;
     }
@@ -201,18 +201,112 @@ resolve_path(const char *path, struct inode **inode)
         dir_close(dir);
         return true;
       }
+   }
+   else
+   {
+     inode_close(*inode);
+     *inode = NULL;
+     dir_close(dir);
+     return false;
+   }
+
+   next:
+     prev_token = token;
+  }
+
+  return false;
+}
+
+bool
+get_containing_folder(const char *dirname, struct dir **dir, char *tok)
+{
+  if(*dirname == '\0' || strlen (dirname) < 1)
+    return false;
+
+  if(strlen (dirname) == 1 && (*dirname == '.' || *dirname == '/'))
+    return false;
+
+  struct thread *t = thread_current();
+  struct inode *inode = NULL;
+
+  char *token, *prev_token = NULL, *save_ptr;
+  char path_temp[strlen(dirname) + 1];
+  memcpy(path_temp, dirname, strlen(dirname) + 1);
+
+  if(t->cur_dir == NULL || dirname[0] == '/')
+    *dir = dir_open_root();
+  else
+    *dir = dir_reopen(t->cur_dir);
+
+  for (token = strtok_r(path_temp, "/", &save_ptr); ; token = strtok_r (NULL, "/", &save_ptr))
+  {
+    if(prev_token == NULL)
+    {
+      prev_token = token;
+      goto next;
+    }
+
+    /* check for . and .. */
+    if(strcmp(prev_token,".") == 0)
+    {
+      goto next;
+    }
+    if(strcmp(prev_token,"..") == 0)
+    {
+      //*inode = dir_get_inode(dir);
+      /* Aakriti: set dir to parent dir */
+      printf("\n********* .. *********\n");
+      goto next;
+    }
+
+    if(dir_lookup (*dir, prev_token, &inode))
+    {
+      if(token != NULL)
+      {
+        /* this isn't last token in the pathname */
+        if(!inode_is_dir(inode))
+        {
+          /* not a dir */
+          inode_close(inode);
+          inode = NULL;
+          dir_close(*dir);
+          return false;
+        }
+        else
+        {
+          /* jump into next directory */
+          dir_close(*dir);
+          *dir = dir_open(inode);
+        }
+      }
+      else
+      {
+        /* last token in the pathname => already exists */
+        inode_close(inode);
+        inode = NULL;
+        dir_close(*dir);
+        return false;
+      }
     }
     else
     {
-      inode_close(*inode);
-      *inode = NULL;
-      dir_close(dir);
-      return false;
+      if(token != NULL)
+      {
+        /* some intermediate directory doesn't exist */
+        inode_close(inode);
+        inode = NULL;
+        dir_close(*dir);
+        return false;
+      }
+      else
+      {
+        /* found the directory */
+        memcpy(tok, prev_token, strlen(prev_token) + 1);
+        return true;
+      }
     }
-
     next:
-      prev_token = token;
+    prev_token = token;
   }
-
   return false;
 }

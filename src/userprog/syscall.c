@@ -13,6 +13,9 @@
 #include "threads/malloc.h"
 #include "devices/input.h"
 #include "threads/synch.h"
+#include "filesys/directory.h"
+#include "filesys/inode.h"
+#include "filesys/free-map.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -131,6 +134,7 @@ syscall_remove (const char *file)
   lock_acquire (&file_lock);
   result = filesys_remove (file);
   lock_release (&file_lock);  
+
   return result;
 }
 
@@ -150,7 +154,6 @@ syscall_open (const char *filename)
  
   if(inode != NULL && inode_is_dir(inode))
   {
-    printf("check dir\n");
     dir = dir_open(inode);
     if (dir == NULL) return -1;
   }
@@ -173,9 +176,15 @@ syscall_open (const char *filename)
   fd_ptr->fd_id = t->fd_id++;
 
   if(file != NULL)
+  {
     fd_ptr->file = file;
+    fd_ptr->dir = NULL;
+  }
   else
+  {
     fd_ptr->dir = dir;
+    fd_ptr->file = NULL;
+  }
 
   /* push into the fd_list the created file descriptor */
   list_push_back (&t->fd_list, &fd_ptr->elem);
@@ -364,17 +373,29 @@ syscall_chdir(const char *dir)
   }
 }
 
-/* CADroid: Creates the directory named dir, (relative or absolute)
+/* CADroid: Creates the directory named dirname, (relative or absolute)
    Returns true if successful, false on failure. */
 bool
-syscall_mkdir(const char *dir)
+syscall_mkdir(const char *dirname)
 {
-  /* Fails if dir already exists 
-     or if any directory name in dir, besides the last, does not already exist. 
-     That is, mkdir("/a/b/c") succeeds only if /a/b already exists and /a/b/c does not. */
+  struct dir *dir;
+  char token[strlen(dirname) + 1];
 
-  /* Aakriti: mkdir */
+  if(!get_containing_folder(dirname, &dir, token))
+    return false;
+
+  block_sector_t inode_sector = 0;
+
+  bool success = (free_map_allocate (1, &inode_sector)
+                  && dir_create (inode_sector, true)
+                  && dir_add (dir, token, inode_sector));
+  if(!success && inode_sector != 0)
+  free_map_release (inode_sector, 1);
+
+  dir_close(dir);
+  return success;
 }
+
 
 /* CADroid: Reads a directory entry from file descriptor fd, which must represent a directory
    if successful, stores the null-terminated file name in name 
@@ -396,16 +417,6 @@ bool
 syscall_isdir(int fd)
 {
   struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd);
-
-  /*
-  struct inode *inode;
-  if(fd_ptr->file != NULL)
-    inode = file_get_inode(fd_ptr->file);
-  else
-    inode = dir_get_inode(fd_ptr->dir);
-
-  return inode_is_dir(inode);
-  */
 
   if(fd_ptr->file != NULL)
     return false;
