@@ -97,7 +97,7 @@ struct buffer_cache_node * buffer_cache_add(block_sector_t sector)
   struct buffer_cache_node *node;
 
   /* Make sure the sector is present on disk */
-  if(!free_map_test(sector))
+  if(sector>2 && !free_map_test(sector))
     return NULL;
 
   /* Check if same sector is already present */
@@ -195,7 +195,6 @@ struct buffer_cache_node * get_buffer_cache()
   {
     node = buffer_cache_evict();
   }
-
 
   lock_acquire(&node->buffer_lock);
   /* If dirty node is returned, write back its contents */

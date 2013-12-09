@@ -38,8 +38,8 @@ filesys_init (bool format)
 void
 filesys_done (void) 
 {
-  buffer_cache_flush();
   free_map_close ();
+  buffer_cache_flush();
 }
 
 /* Creates a file named NAME with the given INITIAL_SIZE.
@@ -49,13 +49,14 @@ filesys_done (void)
 bool
 filesys_create (const char *name, off_t initial_size) 
 {
-  initial_size = initial_size & 0;
   block_sector_t inode_sector = 0;
   struct dir *dir;
   char token[strlen(name) + 1];
 
   if(!get_containing_folder(name, &dir, token))
     return false;
+
+  ASSERT(dir != NULL);
 
   bool success = (dir != NULL
                   && free_map_allocate (1, &inode_sector)
@@ -64,6 +65,14 @@ filesys_create (const char *name, off_t initial_size)
   if (!success && inode_sector != 0) 
   free_map_release (inode_sector, 1);
   dir_close (dir);
+  struct inode *inode = inode_open (inode_sector);
+  if (initial_size > 0 && inode_write_at (inode, "", 1, initial_size - 1) != 1)
+  {
+    inode_remove (inode);
+    inode_close (inode);
+    success = false;
+  }
+  
   return success;
 }
 
@@ -116,7 +125,6 @@ do_format (void)
   printf ("done.\n");
 }
 
-
 bool
 resolve_path(const char *path, struct inode **inode)
 {
@@ -128,19 +136,17 @@ resolve_path(const char *path, struct inode **inode)
   struct dir *dir;
   struct thread *t = thread_current();
 
-  if(strlen (path) == 1 &&  *path == '/')
-  {
-    dir = dir_open_root();
-    *inode = dir_get_inode(dir);
-    dir_close(dir);
-    return true;
-  }
-
   if(strlen (path) == 1 && *path == '.')
   {
     dir = dir_reopen(t->cur_dir);
     *inode = dir_get_inode(dir);
     dir_close(dir);
+    return true;
+  }
+  
+  if(strlen (path) == 1 &&  path[0] == '/')
+  {
+    *inode = inode_open (ROOT_DIR_SECTOR);
     return true;
   }
 
@@ -155,7 +161,6 @@ resolve_path(const char *path, struct inode **inode)
   char *token, *prev_token = NULL, *save_ptr;
   for (token = strtok_r(path_temp, "/", &save_ptr); ; token = strtok_r (NULL, "/", &save_ptr))
   {
-    
     if(prev_token == NULL)
     {
       prev_token = token;
