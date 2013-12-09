@@ -203,8 +203,9 @@ dir_remove (struct dir *dir, const char *name)
 
   /* Aakriti: check here if the inode is a non empty dir and goto done in that case */
   if(inode_is_dir(inode))
+  {
     goto done;
-
+  }
   /* Erase directory entry. */
   e.in_use = false;
   if (inode_write_at (dir->inode, &e, sizeof e, ofs) != sizeof e) 

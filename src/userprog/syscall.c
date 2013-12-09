@@ -283,7 +283,7 @@ syscall_write (int fd, const void *buffer, unsigned size)
     struct file_dscptr *fd_ptr = (struct file_dscptr*)get_file_dscptr (fd); 
 
     if(fd_ptr == NULL || fd_ptr->file == NULL) 
-      return 0;
+      return -1;
     else
     {
       lock_acquire (&file_lock); 
