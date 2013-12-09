@@ -49,7 +49,10 @@ dir_create (block_sector_t sector, block_sector_t p_sector)
       return false;
     }
     else
+    {
+      inode_close (inode);
       return true;
+    }  
   }
   return false;
 }
@@ -237,25 +240,20 @@ dir_remove (struct dir *dir, const char *name)
   {
     /* inode is opened somewhere else too; quit deletion */
     if(inode_get_count(inode) > 1)
-    {
-      //printf("____dir count %d___'%s'\n",inode_get_count(inode),name);
       goto done;
-    }
+
     /* check if empty */
     struct dir * del_dir = dir_open (inode);
     char fname[NAME_MAX + 1];
 
-    if(!dir_readdir(del_dir, fname))
-    {
-      /* empty directory; proceed with deletion */
-      dir_close(del_dir);
-    }
-    else
+    if(dir_readdir(del_dir, fname))
     {
       /* non empty dir; quit deletion */
       dir_close(del_dir);
       goto done;
     }
+    else
+      dir_close (del_dir);
   }
 
   /* Erase directory entry. */

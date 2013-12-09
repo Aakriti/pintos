@@ -116,21 +116,19 @@ fsutil_extract (char **argv UNUSED)
           struct file *dst;
 
           printf ("Putting '%s' into the file system...\n", file_name);
-
           /* Create destination file. */
           if (!filesys_create (file_name, size))
             PANIC ("%s: create failed", file_name);
           dst = filesys_open (file_name);
           if (dst == NULL)
             PANIC ("%s: open failed", file_name);
-
           /* Do copy. */
           while (size > 0)
             {
               int chunk_size = (size > BLOCK_SECTOR_SIZE
                                 ? BLOCK_SECTOR_SIZE
                                 : size);
-              block_read (src, sector++, data);
+              block_read (src, sector++, data);              
               if (file_write (dst, data, chunk_size) != chunk_size)
                 PANIC ("%s: write failed with %d bytes unwritten",
                        file_name, size);

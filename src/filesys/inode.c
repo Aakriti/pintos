@@ -43,7 +43,6 @@ struct inode
     int open_cnt;                       /* Number of openers. */
     bool removed;                       /* True if deleted, false otherwise. */
     bool is_dir;                        /* CADroid: True if inode represents a dir, false otherwise */
-    block_sector_t parent;              /* CADroid: Parent pointer to implement .. in file paths */
     int deny_write_cnt;                 /* 0: writes ok, >0: deny writes. */
     struct lock deny_write_lock;		/* For deny_write_cnt protection. */
     struct condition no_writers;		/* Writers wait on for condition. */
@@ -91,8 +90,8 @@ inode_create (block_sector_t sector, bool is_dir)
   disk_inode->magic = INODE_MAGIC;
   disk_inode->inode_type = (is_dir == true)? 1 : 0;
   
-  buffer_cache_write (sector, (uint8_t *)disk_inode, 0, BLOCK_SECTOR_SIZE);  
-  buffer_cache_writeback (buffer_cache_add(sector)); 
+  buffer_cache_write (sector, (uint8_t *)disk_inode, 0, BLOCK_SECTOR_SIZE);
+  buffer_cache_writeback (buffer_cache_add(sector));
   return true;
 }
 
@@ -141,19 +140,6 @@ inode_open (block_sector_t sector)
   buffer_cache_read(sector, (uint8_t *)&disk_inode, 0, BLOCK_SECTOR_SIZE);
   inode->is_dir = (disk_inode.inode_type == 1)? 1:0;
   
-  if(inode->is_dir)
-  {
-    struct inode* p_inode;
-    struct dir *dir;
-    
-    dir = dir_open(inode);
-    ASSERT (dir != NULL );
-    if (dir_lookup (dir, "..", &p_inode))
-      inode->parent = p_inode->sector;
-  }
-  else
-    inode->parent = 1;
-  
   lock_release (&open_inodes_lock);
   return inode;
 }
@@ -162,10 +148,12 @@ inode_open (block_sector_t sector)
 struct inode *
 inode_reopen (struct inode *inode)
 {
+int count;
   if (inode != NULL)
   {
     lock_acquire (&open_inodes_lock);
     inode->open_cnt++;
+count = inode->open_cnt;
     lock_release (&open_inodes_lock);
   }
   return inode;
@@ -211,6 +199,7 @@ inode_close (struct inode *inode)
 
   /* Release resources if this was the last opener. */
   lock_acquire (&open_inodes_lock);
+
   if (--inode->open_cnt == 0)
     {
       /* Remove from inode list and release lock. */
@@ -598,10 +587,8 @@ inode_allow_write (struct inode *inode)
 off_t
 inode_length (const struct inode *inode)
 {
-//printf("+++++++++Inside inode_length finding for inode %x+++++++\n",inode);
   struct inode_disk disk_inode;
   buffer_cache_read(inode->sector, (uint8_t *)&disk_inode, 0, BLOCK_SECTOR_SIZE);
-//printf("+++++++++Returning inode_length %d+++++++\n",disk_inode.length);  
   return disk_inode.length;
 }
 
@@ -612,14 +599,6 @@ inode_is_dir(struct inode *inode)
   return inode->is_dir;
 }
 
-/* Returns parent sector of inode */
-block_sector_t 
-inode_get_parent(struct inode *inode)
-{
-  ASSERT (inode->is_dir == true);
-  return inode->parent;
-}
-
 /* Returns open count of inode */
 int
 inode_get_count(struct inode *inode)
@@ -627,9 +606,9 @@ inode_get_count(struct inode *inode)
   return inode->open_cnt;
 }
 
-/* Returns parent sector of inode */
+/* Returns the sector of inode */
 block_sector_t 
-inode_get_sector(struct inode *inode);
+inode_get_sector(struct inode *inode)
 {
   return inode->sector;
 }
