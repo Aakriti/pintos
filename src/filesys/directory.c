@@ -203,11 +203,32 @@ dir_remove (struct dir *dir, const char *name)
   if (inode == NULL)
     goto done;
 
-  /* Aakriti: check here if the inode is a non empty dir and goto done in that case */
+  /* If inode represents a dir */
   if(inode_is_dir(inode))
   {
-    goto done;
+    /* inode is opened somewhere else too; quit deletion */
+    if(inode_get_count(inode) > 1)
+    {
+      //printf("____dir count %d___'%s'\n",inode_get_count(inode),name);
+      goto done;
+    }
+    /* check if empty */
+    struct dir * del_dir = dir_open (inode);
+    char fname[NAME_MAX + 1];
+
+    if(!dir_readdir(del_dir, fname))
+    {
+      /* empty directory; proceed with deletion */
+      dir_close(del_dir);
+    }
+    else
+    {
+      /* non empty dir; quit deletion */
+      dir_close(del_dir);
+      goto done;
+    }
   }
+
   /* Erase directory entry. */
   e.in_use = false;
   if (inode_write_at (dir->inode, &e, sizeof e, ofs) != sizeof e) 

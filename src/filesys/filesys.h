@@ -20,6 +20,7 @@ bool filesys_create (const char *name, off_t initial_size);
 struct file *filesys_open (const char *name);
 bool filesys_remove (const char *name);
 bool resolve_path(const char *path, struct inode **inode);
+bool get_dir(const char *dirpath, struct dir **dir, char *tok);
 bool get_containing_folder(const char *dirname, struct dir **dir, char *tok);
 
 #endif /* filesys/filesys.h */

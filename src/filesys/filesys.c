@@ -103,7 +103,7 @@ filesys_remove (const char *name)
   struct dir *dir = NULL;
   char token[strlen(name) + 1];
 
-  if(!get_containing_folder(name, &dir, token))
+  if(!get_dir(name, &dir, token))
     return false;
 
   bool success = dir != NULL && dir_remove (dir, token);
@@ -128,8 +128,6 @@ do_format (void)
 bool
 resolve_path(const char *path, struct inode **inode)
 {
-  //printf("__resolving__'%s'__\n", path);
-
   if(*path == '\0' || strlen (path) < 1)
     return false;
 
@@ -309,6 +307,88 @@ get_containing_folder(const char *dirname, struct dir **dir, char *tok)
         memcpy(tok, prev_token, strlen(prev_token) + 1);
         return true;
       }
+    }
+    next:
+    prev_token = token;
+  }
+  return false;
+}
+
+
+bool
+get_dir(const char *dirname, struct dir **dir, char *tok)
+{
+  if(*dirname == '\0' || strlen (dirname) < 1)
+    return false;
+
+  if(strlen (dirname) == 1 && (*dirname == '.' || *dirname == '/'))
+    return false;
+
+  struct thread *t = thread_current();
+  struct inode *inode = NULL;
+
+  char *token, *prev_token = NULL, *save_ptr;
+  char path_temp[strlen(dirname) + 1];
+  memcpy(path_temp, dirname, strlen(dirname) + 1);
+
+  if(t->cur_dir == NULL || dirname[0] == '/')
+    *dir = dir_open_root();
+  else
+    *dir = dir_reopen(t->cur_dir);
+
+  for (token = strtok_r(path_temp, "/", &save_ptr); ; token = strtok_r (NULL, "/", &save_ptr))
+  {
+    if(prev_token == NULL)
+    {
+      prev_token = token;
+      goto next;
+    }
+
+    /* check for . and .. */
+    if(strcmp(prev_token,".") == 0)
+    {
+      goto next;
+    }
+    if(strcmp(prev_token,"..") == 0)
+    {
+      //*inode = dir_get_inode(dir);
+      /* Aakriti: set dir to parent dir */
+      printf("\n********* .. *********\n");
+      goto next;
+    }
+
+    if(dir_lookup (*dir, prev_token, &inode))
+    {
+      if(token != NULL)
+      {
+        /* this isn't last token in the pathname */
+        if(!inode_is_dir(inode))
+        {
+          /* not a dir */
+          inode_close(inode);
+          inode = NULL;
+          dir_close(*dir);
+          return false;
+        }
+        else
+        {
+          /* jump into next directory */
+          dir_close(*dir);
+          *dir = dir_open(inode);
+        }
+      }
+      else
+      {
+        memcpy(tok, prev_token, strlen(prev_token) + 1);
+        return true;
+      }
+    }
+    else
+    {
+      inode_close(inode);
+      inode = NULL;
+      dir_close(*dir);
+      return false;
     }
     next:
     prev_token = token;

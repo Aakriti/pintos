@@ -605,3 +605,18 @@ inode_get_parent(struct inode *inode)
 {
   return inode->parent;
 }
+
+/* Returns open count of inode */
+int
+inode_get_count(struct inode *inode)
+{
+  return inode->open_cnt;
+}
+
+/* Returns parent sector of inode */
+block_sector_t 
+inode_get_sector(struct inode *inode);
+{
+  return inode->sector;
+}
+

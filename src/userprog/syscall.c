@@ -384,10 +384,13 @@ syscall_mkdir(const char *dirname)
   if(!get_containing_folder(dirname, &dir, token))
     return false;
 
+  struct inode *inode = dir_get_inode(dir);
+  block_sector_t parent_sector = inode_get_sector(inode);
+
   block_sector_t inode_sector = 0;
 
   bool success = (free_map_allocate (1, &inode_sector)
-                  && dir_create (inode_sector, true)
+                  && dir_create (inode_sector, parent_sector)
                   && dir_add (dir, token, inode_sector));
   if(!success && inode_sector != 0)
   free_map_release (inode_sector, 1);
